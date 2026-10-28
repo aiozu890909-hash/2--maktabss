@@ -1,4 +1,4 @@
-faces_cache.pkl
+__pycache__/
+*.pkl
 outbox.db
 unknown/
-__pycache__/

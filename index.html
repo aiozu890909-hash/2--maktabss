@@ -49,6 +49,10 @@ const nowS=()=>ymd(new Date())+' '+hms(new Date()),fnd=(db,id)=>db.students.find
 const pubS=s=>({id:s.id,ism:s.ism,familiya:s.familiya,sinf:s.sinf,extra:s.extra,active:s.active,photoId:s.photo?s.id:''});
 const evv=(db,e)=>{const s=fnd(db,e.studentId)||{};return{ts:e.ts,time:hms(new Date(e.ts)),id:e.studentId,ism:s.ism||'',familiya:s.familiya||'',sinf:s.sinf||'',type:e.type,note:e.note}};
 const MUT=['addStudent','updateStudent','deactivate','logEvent','editAttendance','closeDay','setSettings'];
+function closeD(db,day){db.students.filter(s=>s.active&&!db.att.some(r=>r[0]===day&&r[1]===s.id)).forEach(s=>db.att.push([day,s.id,s.ism,s.familiya,s.sinf,'','','','','Kelmadi',nowS()]));
+  const rows=db.att.filter(r=>r[0]===day),csv='\ufeff'+[H11].concat(rows).map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n'),name='davomat-'+day+'.csv';
+  db.arch=db.arch.filter(a=>a.name!==name).concat({name,date:nowS(),csv});return{rows:rows.length}}
+function autoClose(db){const t=ymd(new Date());let ch=false;[...new Set(db.att.map(r=>r[0]))].filter(d=>d<t&&!db.arch.some(a=>a.name==='davomat-'+d+'.csv')).forEach(d=>{closeD(db,d);ch=true});return ch}
 const LA={
  listStudents:(d,db)=>({students:db.students.map(pubS)}),
  photo:(d,db)=>({data:(fnd(db,d.photoId)||{}).photo||''}),
@@ -66,15 +70,13 @@ const LA={
    else{type='REVIEW';note='kunning 3+ aniqlashi — admin tekshiradi'}}
   db.events.push({eventId:d.eventId,ts:d.ts,studentId:d.studentId||'',type,note:(note+' [sinov]').trim()});return{type,time:t}},
  review:(d,db)=>({events:db.events.filter(e=>['REVIEW','UNKNOWN','IGNORED'].includes(e.type)).slice(-100).reverse().map(e=>{const s=fnd(db,e.studentId)||{};return{ts:ymd(new Date(e.ts))+' '+hms(new Date(e.ts)),id:e.studentId,name:(s.ism||'')+' '+(s.familiya||''),sinf:s.sinf||'',type:e.type,note:e.note}})}),
- closeDay:(d,db)=>{const day=d.day;db.students.filter(s=>s.active&&!db.att.some(r=>r[0]===day&&r[1]===s.id)).forEach(s=>db.att.push([day,s.id,s.ism,s.familiya,s.sinf,'','','','','Kelmadi',nowS()]));
-  const rows=db.att.filter(r=>r[0]===day),csv='\ufeff'+[H11].concat(rows).map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n'),name='davomat-'+day+'.csv';
-  db.arch=db.arch.filter(a=>a.name!==name).concat({name,date:nowS(),csv});return{rows:rows.length}},
+ closeDay:(d,db)=>closeD(db,d.day),
  archive:(d,db)=>({files:db.arch.slice().sort((a,b)=>b.name.localeCompare(a.name)).map(a=>({name:a.name,date:a.date,url:URL.createObjectURL(new Blob([a.csv],{type:'text/csv'}))}))}),
  getSettings:(d,db)=>db.cfg,
  setSettings:(d,db)=>{['SCHOOL','START','END','TZ','MINGAP'].forEach(k=>{if(d[k]!=null)db.cfg[k]=String(d[k])})}
 };
-async function localApi(a,d){const f=LA[a];if(!f)throw new Error("Noma'lum amal");const db=DB(),r=f(d,db)||{};
- if(MUT.includes(a)){if(db.events.length>3000)db.events.splice(0,db.events.length-3000);try{localStorage.setItem('ssdb',JSON.stringify(db))}catch(e){throw new Error("Brauzer xotirasi to'ldi yoki ruxsat yo'q")}}return{ok:true,...r}}
+async function localApi(a,d){const f=LA[a];if(!f)throw new Error("Noma'lum amal");const db=DB(),ch=autoClose(db),r=f(d,db)||{};
+ if(MUT.includes(a)||ch){if(db.events.length>3000)db.events.splice(0,db.events.length-3000);try{localStorage.setItem('ssdb',JSON.stringify(db))}catch(e){throw new Error("Brauzer xotirasi to'ldi yoki ruxsat yo'q")}}return{ok:true,...r}}
 async function sim(){const act=ST.filter(s=>s.active);view(`<h2>Sinov: kamera o'rniga</h2><div class="card"><p class="l">Haqiqiy kamera Python dasturi orqali ishlaydi. Bu yerda tanilish hodisasini qo'lda yuborib, kirish / chiqish / kechikish qoidalarini tekshirasiz (hodisa izohida [sinov] belgisi qoladi).</p>
  <div class="bar"><select id="m1">${act.map(s=>`<option value="${esc(s.id)}">${esc(s.ism+' '+s.familiya+' ('+s.sinf+')')}</option>`).join('')||'<option value="">Avval o\'quvchi qo\'shing</option>'}</select><input type="time" step="1" id="m2" value="${hms(new Date())}"><button class="p" onclick="msim()">Tanildi</button><button onclick="msim(1)">Noma'lum yuz</button></div><div id="mr"></div></div>`)}
 async function msim(u){const id=u?'':$('#m1').value;if(!u&&!id)return;const ts=new Date(ymd(new Date())+'T'+($('#m2').value||'00:00:00').padEnd(8,':00')).getTime();
@@ -101,7 +103,7 @@ function go(p){clearInterval(timer);location.hash=p;document.querySelectorAll('a
 
 const evRows=l=>l.map(e=>{const t=TL[e.type]||[e.type,'mut'];return `<tr><td>${av(e.id,e.ism,e.familiya)}${esc(e.ism+' '+e.familiya)||'<i>Noma\'lum shaxs</i>'}</td><td>${esc(e.sinf)}</td><td>${e.time}</td><td><span class="chip ${t[1]}">${t[0]}</span> ${esc(e.note)}</td></tr>`}).join('');
 async function dash(p){const draw=async()=>{const t=await api('today'),live=p==='live';
- view(`<h2>${live?'Jonli davomat':'Boshqaruv paneli'} <small style="font-size:13px;color:#64748b">${t.day} · dars ${t.hours}</small></h2>
+ view(`<h2>${live?'Jonli davomat':'Boshqaruv paneli'} <small style="font-size:13px;color:#64748b">${t.day} · dars ${t.hours} · yangi kun 00:00 da</small></h2>
  <div class="bar"><span class="chip ${t.hb.online?'ok':'bad'}">Kamera: ${t.hb.online?'online · '+t.hb.fps+' FPS':'offline'}</span>${t.local?'<span class="chip warn">Mahalliy rejim (brauzer xotirasi)</span>':`<span class="chip ok">Sheets ulangan</span><span class="chip ${t.drive?'ok':'bad'}">Drive ${t.drive?'tayyor':'xato'}</span>`}</div>
  ${live?'':`<div class="grid"><div class="card"><div class="l">Jami o'quvchilar</div><div class="k">${t.total}</div></div><div class="card"><div class="l">Bugun kelganlar</div><div class="k">${t.present}</div></div>
  <div class="card"><div class="l">Kechikkanlar</div><div class="k">${t.late}</div></div><div class="card"><div class="l">Erta ketganlar</div><div class="k">${t.early}</div></div>
@@ -126,8 +128,8 @@ async function deact(id){if(!confirm("O'quvchi faol ro'yxatdan chiqarilsinmi? Ta
 async function hist(){const t=ymd(new Date()),cl=[...new Set(ST.map(s=>s.sinf))].sort();
  view(`<h2>Davomat tarixi</h2><div class="bar"><input type="date" id="h1" value="${t}"><input type="date" id="h2" value="${t}"><select id="h3"><option value="">Barcha sinflar</option>${cl.map(x=>`<option>${esc(x)}</option>`).join('')}</select>
  <input id="h4" placeholder="O'quvchi..."><select id="h5"><option value="">Barcha holatlar</option><option>O'z vaqtida</option><option>Kechik</option><option>Erta</option><option>Kelmadi</option></select>
- <button onclick="rng(0)">Bugun</button><button onclick="rng(6)">Hafta</button><button onclick="rng(29)">Oy</button><button class="p" onclick="hload()">Qidirish</button><button onclick="xl()">Excel (.xlsx)</button></div><div id="hr"></div>`);hload()}
-function rng(n){const d=new Date();$('#h2').value=ymd(d);d.setDate(d.getDate()-n);$('#h1').value=ymd(d);hload()}
+ <button onclick="rng(-1)">Kecha</button><button onclick="rng(0)">Bugun</button><button onclick="rng(6)">Hafta</button><button onclick="rng(29)">Oy</button><button class="p" onclick="hload()">Qidirish</button><button onclick="xl()">Excel (.xlsx)</button></div><div id="hr"></div>`);hload()}
+function rng(n){const d=new Date();if(n<0){d.setDate(d.getDate()-1);$('#h1').value=$('#h2').value=ymd(d);return hload()}$('#h2').value=ymd(d);d.setDate(d.getDate()-n);$('#h1').value=ymd(d);hload()}
 let HR=[];
 async function hload(){const r=await api('history',{from:$('#h1').value,to:$('#h2').value,sinf:$('#h3').value}),q=$('#h4').value.toLowerCase(),s=$('#h5').value;
  HR=r.rows.map(v=>Object.fromEntries(r.head.map((h,i)=>[h,v[i]]))).filter(x=>(!q||(x.Ism+x.Familiya+x.ID).toLowerCase().includes(q))&&(!s||x.Holat.includes(s)));
@@ -139,11 +141,12 @@ async function fix(day,id,i,o){const a=prompt('Kirish vaqti (HH:MM:SS, bo\'sh = 
 
 async function rev(){const r=await api('review');view(`<h2>Tekshiruv</h2><div class="card"><p class="l">Noma'lum yuzlar, takroriy va kunning 3+ aniqlashlari avtomatik yozilmaydi — shu yerda ko'rinadi. Kerak bo'lsa "Davomat tarixi"da qo'lda tuzating.</p>
  <table><tr><th>Vaqt</th><th>O'quvchi</th><th>Sinf</th><th>Turi</th><th>Izoh</th></tr>${r.events.map(e=>`<tr><td>${e.ts}</td><td>${esc(e.name.trim())||'—'}</td><td>${esc(e.sinf)}</td><td><span class="chip ${TL[e.type][1]}">${TL[e.type][0]}</span></td><td>${esc(e.note)}</td></tr>`).join('')||'<tr><td colspan=5>Bo\'sh</td></tr>'}</table></div>`)}
-async function arch(){const r=await api('archive');view(`<h2>Arxiv</h2><div class="bar"><input type="date" id="cd" value="${ymd(new Date())}"><button class="p" onclick="cday()">Kunni yopish va arxivlash</button><span class="l">13:00 dan keyin ishlating (kelmaganlar "Kelmadi" deb belgilanadi). Avtomatik: har ish kuni 14:00.</span></div>
+async function arch(){const r=await api('archive');view(`<h2>Arxiv</h2><div class="bar"><input type="date" id="cd" value="${ymd(new Date(Date.now()-864e5))}"><button class="p" onclick="cday()">Kunni yopish va arxivlash</button><span class="l">Qo'lda yopish (kelmaganlar "Kelmadi" deb belgilanadi). Avtomatik: har kuni 00:00 da oldingi kun yopiladi, arxivlanadi va yangi kunga o'tiladi.</span></div>
  <div class="card"><table><tr><th>Fayl</th><th>Yangilangan</th></tr>${r.files.map(f=>`<tr><td><a href="${esc(f.url)}" target="_blank" ${f.url.startsWith('blob:')?`download="${esc(f.name)}"`:''}>${esc(f.name)}</a></td><td>${f.date}</td></tr>`).join('')||'<tr><td colspan=2>Arxiv bo\'sh</td></tr>'}</table></div>`)}
 async function cday(){if(!confirm($('#cd').value+' kunini yopib arxivlaysizmi?'))return;const r=await api('closeDay',{day:$('#cd').value});alert('Arxivlandi: '+r.rows+' yozuv');arch()}
 async function set(){const s=await api('getSettings');view(`<h2>Sozlamalar</h2><div class="card"><div class="bar"><label>Maktab nomi <input id="s0" value="${esc(s.SCHOOL||'')}"></label><label>Dars boshi <input id="s1" value="${s.START}" size=6></label><label>Dars oxiri <input id="s2" value="${s.END}" size=6></label><label>Vaqt mintaqasi <input id="s3" value="${s.TZ}"></label><label>Chiqish uchun min. oraliq (daq) <input id="s4" value="${s.MINGAP}" size=4></label><button class="p" onclick="sset()">Saqlash</button></div>
  <p class="l">${LOCAL?"Mahalliy rejim: ma'lumot faqat shu brauzerda saqlanadi (backend manzili SCHOOL_API bo'sh).":"Backend ulangan."}</p>${LOCAL?'':'<button onclick="lsw(sessionStorage,\'ssTok\',null);lsw(localStorage,\'ssLocal\',null);LOCAL=false;TOK=\'\';start()">Chiqish</button>'}</div>`)}
 async function sset(){await api('setSettings',{SCHOOL:$('#s0').value.trim(),START:$('#s1').value,END:$('#s2').value,TZ:$('#s3').value,MINGAP:$('#s4').value});alert('Saqlandi')}
+let LD=ymd(new Date());setInterval(()=>{const n=ymd(new Date());if(n!==LD){LD=n;if(TOK||LOCAL)go(location.hash.slice(1)||'dash')}},15000);
 start();
 </script></body></html>

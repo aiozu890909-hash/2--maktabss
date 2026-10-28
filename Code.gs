@@ -47,7 +47,7 @@ function setup() {
   }
   Logger.log('DEVICE_KEY (Python uchun): ' + P.getProperty('DEVICE_KEY'));
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'dailyClose').forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('dailyClose').timeBased().everyDays(1).atHour(14).create(); // 13:00 dan keyin
+  ScriptApp.newTrigger('dailyClose').timeBased().everyDays(1).atHour(0).create(); // har kuni 00:00-01:00 oralig'ida: oldingi kunni yopadi
   folder(['Faces']);
 }
 function setAdmin(user, pass) { P.setProperty('ADMIN_USER', user); P.setProperty('ADMIN_HASH', hash(pass)); }
@@ -139,9 +139,14 @@ function closeDay(day, user) {
   audit(user, 'closeDay', { day: day, rows: rows.length });
   return { url: f.getUrl(), rows: rows.length };
 }
+/** Yarim tunda ishlaydi: kecha (va zaxira uchun undan oldingi kun) yopiladi, arxivlanadi; yangi kun avtomatik sana bo'yicha boshlanadi. */
 function dailyClose() {
-  const wd = +fmt(Date.now(), 'u'); if (wd > 5) return; // shanba-yakshanba
-  closeDay(fmt(Date.now(), 'yyyy-MM-dd'), 'auto');
+  [3, 27].forEach(h => {                       // 3 soat va 27 soat oldin = kecha va undan oldingi kun
+    const ts = Date.now() - h * 3600000, day = fmt(ts, 'yyyy-MM-dd');
+    if (+fmt(ts, 'u') > 5) return;             // shanba-yakshanba
+    if (!attRows(3000).some(r => r.v[0] === day && r.v[5])) return; // kun bo'lmagan (bayram) — yopilmaydi
+    closeDay(day, 'auto');
+  });
 }
 function walk(f, out) {
   const fi = f.getFiles(); while (fi.hasNext()) { const x = fi.next(); out.push({ name: x.getName(), url: x.getUrl(), date: fmt(x.getLastUpdated(), 'yyyy-MM-dd HH:mm') }); }

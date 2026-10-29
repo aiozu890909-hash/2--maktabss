@@ -1,6 +1,7 @@
 /**
  * SmartSchool Attendance — Google Apps Script backend (Web App)
  * Sheets: Students, Attendance, Events, Audit.  Drive: SmartSchool/Faces va SmartSchool/Attendance Archive/YYYY/MM/DD
+ * Python (camera.py) davomatni Sheets'ga TO'G'RIDAN-TO'G'RI yozadi va Drive'dan rasm oladi; bu skript faqat SAYT uchun.
  * O'rnatish: setup() ni bir marta ishga tushiring -> Deploy > New deployment > Web app (Execute as: Me, Access: Anyone).
  */
 /* ====== SHU IKKITA QIYMATNI YOZING ======
@@ -11,13 +12,28 @@ const SHEET_ID = '';
 const FOLDER_ID = '';
 
 const P = PropertiesService.getScriptProperties();
-const DEF = { START: '08:30', END: '13:00', TZ: 'Asia/Tashkent', MINGAP: '10', SCHOOL: 'Maktab' };
-const cfg = k => P.getProperty(k) || DEF[k];
+const DEF = { START: '08:30', END: '13:00', TZ: 'Asia/Tashkent', MINGAP: '10', SCHOOL: 'Maktab', CLOSE_HOUR: '0' };
+let _cfg = null;
+const cfg = k => {   // sozlamalar 'Settings' varag'ida (Python ham shuni o'qiydi)
+  if (!_cfg) {
+    _cfg = {}; const s = sh('Settings');
+    if (s && s.getLastRow() > 1) s.getRange(2, 1, s.getLastRow() - 1, 2).getValues().forEach(r => { if (r[0] !== '' && r[1] !== '') _cfg[r[0]] = String(r[1]); });
+  }
+  return _cfg[k] || DEF[k];
+};
+function setCfg(k, v) {
+  const s = sh('Settings'), n = s.getLastRow();
+  const keys = n > 1 ? s.getRange(2, 1, n - 1, 1).getValues().map(r => r[0]) : [];
+  const i = keys.indexOf(k);
+  if (i > -1) s.getRange(i + 2, 2).setValue(String(v)); else s.appendRow([k, String(v)]);
+  _cfg = null;
+}
 const HEAD = {
   Students: ['id', 'ism', 'familiya', 'sinf', 'photoId', 'extra', 'active', 'createdAt', 'updatedAt'],
   Attendance: ['Sana', 'ID', 'Ism', 'Familiya', 'Sinf', 'Kirish', 'Chiqish', 'Kechikish (daq)', 'Erta ketish (daq)', 'Holat', 'Yangilangan'],
   Events: ['eventId', 'ts', 'studentId', 'type', 'note'],
-  Audit: ['ts', 'user', 'action', 'details']
+  Audit: ['ts', 'user', 'action', 'details'],
+  Settings: ['key', 'value']
 };
 let _ss;
 const SS = () => _ss || (_ss = SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActive());
@@ -25,7 +41,8 @@ const sh = n => SS().getSheetByName(n);
 const fmt = (ts, f) => Utilities.formatDate(new Date(ts), cfg('TZ'), f);
 const mins = t => { const p = String(t).split(':'); return +p[0] * 60 + +p[1]; };
 const nowStr = () => fmt(Date.now(), 'yyyy-MM-dd HH:mm:ss');
-const hash = (pw) => Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, pw + P.getProperty('SALT')));
+const salt = () => { let s = P.getProperty('SALT'); if (!s) { s = Utilities.getUuid(); P.setProperty('SALT', s); } return s; };
+const hash = (pw) => Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, pw + salt()));
 
 /* ---------- O'rnatish ---------- */
 function setup() {
@@ -39,15 +56,15 @@ function setup() {
   sh('Students').getRange(1, 1, sh('Students').getMaxRows(), 1).setNumberFormat('@');
   sh('Events').getRange(1, 3, sh('Events').getMaxRows(), 1).setNumberFormat('@');
   if (!P.getProperty('SALT')) P.setProperty('SALT', Utilities.getUuid());
-  if (!P.getProperty('DEVICE_KEY')) P.setProperty('DEVICE_KEY', Utilities.getUuid() + Utilities.getUuid());
+  const S = sh('Settings'); S.getRange(1, 2, S.getMaxRows(), 1).setNumberFormat('@'); // '08:30' vaqt bo'lib ketmasin
+  const have = S.getLastRow() > 1 ? S.getRange(2, 1, S.getLastRow() - 1, 1).getValues().map(r => r[0]) : [];
+  ['SCHOOL', 'START', 'END', 'TZ', 'MINGAP', 'CLOSE_HOUR', 'HB_T', 'HB_FPS', 'HB_CAM', 'HB_HOST'].forEach(k => { if (have.indexOf(k) < 0) S.appendRow([k, DEF[k] || '']); });
   if (!P.getProperty('ADMIN_USER')) {
     const pw = Utilities.getUuid().slice(0, 10);
     setAdmin('admin', pw);
     Logger.log('ADMIN login: admin / ' + pw + '  (parolni setAdmin(login, parol) bilan almashtiring)');
   }
-  Logger.log('DEVICE_KEY (Python uchun): ' + P.getProperty('DEVICE_KEY'));
-  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'dailyClose').forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('dailyClose').timeBased().everyDays(1).atHour(0).create(); // har kuni 00:00-01:00 oralig'ida: oldingi kunni yopadi
+  installTrigger();
   folder(['Faces']);
 }
 function setAdmin(user, pass) { P.setProperty('ADMIN_USER', user); P.setProperty('ADMIN_HASH', hash(pass)); }
@@ -91,39 +108,6 @@ function findRow(day, id) {
   return null;
 }
 
-/* ---------- Hodisa yozish (idempotent) ---------- */
-function logEvent(d) {
-  const lock = LockService.getScriptLock(); lock.waitLock(25000);
-  try {
-    const ev = sh('Events'), n = ev.getLastRow();
-    if (n > 1) {
-      const st = Math.max(2, n - 2999);
-      if (ev.getRange(st, 1, n - st + 1, 1).getValues().some(r => r[0] === d.eventId)) return { dup: true };
-    }
-    const day = fmt(d.ts, 'yyyy-MM-dd'), t = fmt(d.ts, 'HH:mm:ss');
-    let type = 'UNKNOWN', note = '';
-    const stu = d.studentId ? students().find(s => s.id === String(d.studentId)) : null;
-    if (d.studentId && (!stu || !stu.active)) note = 'faol bo\'lmagan yoki noma\'lum ID';
-    if (stu && stu.active) {
-      const A = sh('Attendance'), r = findRow(day, stu.id);
-      if (!r) {
-        const c = compute(t);
-        A.appendRow([day, stu.id, stu.ism, stu.familiya, stu.sinf, t, '', c.late, '', c.st, nowStr()]);
-        type = 'IN';
-      } else if (r.v[5] && !r.v[6]) {
-        if (mins(t) - mins(r.v[5]) < +cfg('MINGAP')) { type = 'IGNORED'; note = 'juda yaqin takror'; }
-        else {
-          const c = compute(r.v[5], t);
-          A.getRange(r.row, 7, 1, 5).setValues([[t, c.late, c.early, c.st, nowStr()]]);
-          type = 'OUT';
-        }
-      } else { type = 'REVIEW'; note = 'kunning 3+ aniqlashi — admin tekshiradi'; }
-    }
-    ev.appendRow([d.eventId, d.ts, d.studentId || '', type, note]);
-    return { type: type, time: t };
-  } finally { lock.releaseLock(); }
-}
-
 /* ---------- Kunni yopish va arxivlash ---------- */
 function closeDay(day, user) {
   const A = sh('Attendance'), have = {};
@@ -139,12 +123,19 @@ function closeDay(day, user) {
   audit(user, 'closeDay', { day: day, rows: rows.length });
   return { url: f.getUrl(), rows: rows.length };
 }
-/** Yarim tunda ishlaydi: kecha (va zaxira uchun undan oldingi kun) yopiladi, arxivlanadi; yangi kun avtomatik sana bo'yicha boshlanadi. */
+/** Kunni yopish vaqti (Settings > CLOSE_HOUR, soat 0-23). Trigger shu soatda ishga tushadi. */
+function installTrigger() {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'dailyClose').forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('dailyClose').timeBased().everyDays(1).atHour(+cfg('CLOSE_HOUR')).create();
+}
+/** Faqat TUGAGAN kunlar yopiladi: dars 13:00 gacha, shuning uchun 13:00 dan oldin yopilsa kecha (va zaxira uchun undan oldingi kun),
+ *  13:00 dan keyin yopilsa bugun va kecha. Joriy kunning yozuvlari hech qachon vaqtidan oldin yopilmaydi. */
 function dailyClose() {
-  [3, 27].forEach(h => {                       // 3 soat va 27 soat oldin = kecha va undan oldingi kun
-    const ts = Date.now() - h * 3600000, day = fmt(ts, 'yyyy-MM-dd');
-    if (+fmt(ts, 'u') > 5) return;             // shanba-yakshanba
-    if (!attRows(3000).some(r => r.v[0] === day && r.v[5])) return; // kun bo'lmagan (bayram) — yopilmaydi
+  const h = +cfg('CLOSE_HOUR'), offs = h >= 13 ? [0, 1] : [1, 2];
+  offs.forEach(k => {
+    const ts = Date.now() - k * 86400000, day = fmt(ts, 'yyyy-MM-dd');
+    if (+fmt(ts, 'u') > 5) return;                                   // shanba-yakshanba
+    if (!attRows(3000).some(r => r.v[0] === day && r.v[5])) return;  // hech kim kelmagan kun (bayram) yopilmaydi
     closeDay(day, 'auto');
   });
 }
@@ -167,13 +158,10 @@ function login(d) {
 
 /* ---------- Amallar ---------- */
 const ACT = {
-  faces: () => ({ students: students().filter(s => s.active && s.photoId).map(s => ({ id: s.id, ism: s.ism, familiya: s.familiya, sinf: s.sinf, photoId: s.photoId })) }),
   photo: d => {
     if (!students().some(s => s.photoId === d.photoId)) throw new Error('Rasm topilmadi');
     return { data: Utilities.base64Encode(DriveApp.getFileById(d.photoId).getBlob().getBytes()) };
   },
-  logEvent: d => logEvent(d),
-  heartbeat: d => { P.setProperty('HB', JSON.stringify({ t: Date.now(), fps: d.fps, cam: d.cam, host: d.host })); },
   listStudents: () => ({ students: students() }),
   addStudent: (d, u) => {
     const id = String(d.id || '').trim();
@@ -198,7 +186,7 @@ const ACT = {
   today: () => {
     const day = fmt(Date.now(), 'yyyy-MM-dd'), rows = attRows(2000).filter(r => r.v[0] === day).map(r => r.v);
     const total = students().filter(s => s.active).length, present = rows.filter(r => r[5]);
-    const hb = JSON.parse(P.getProperty('HB') || 'null');
+    const hbT = +cfg('HB_T'), hb = hbT ? { t: hbT, fps: cfg('HB_FPS'), cam: cfg('HB_CAM'), host: cfg('HB_HOST') } : null;
     let drive = true; try { folder([]); } catch (e) { drive = false; }
     const ev = sh('Events'), n = ev.getLastRow(), map = {}; students().forEach(s => map[s.id] = s);
     const recent = n < 2 ? [] : ev.getRange(Math.max(2, n - 29), 1, Math.min(n - 1, 30), 5).getValues().reverse().map(r => {
@@ -236,16 +224,18 @@ const ACT = {
   },
   closeDay: (d, u) => closeDay(d.day, u),
   archive: () => { const out = []; walk(folder(['Attendance Archive']), out); out.sort((a, b) => b.name.localeCompare(a.name)); return { files: out }; },
-  getSettings: () => ({ SCHOOL: cfg('SCHOOL'), START: cfg('START'), END: cfg('END'), TZ: cfg('TZ'), MINGAP: cfg('MINGAP') }),
-  setSettings: (d, u) => { ['SCHOOL', 'START', 'END', 'TZ', 'MINGAP'].forEach(k => { if (d[k]) P.setProperty(k, String(d[k])); }); audit(u, 'setSettings', d); }
+  getSettings: () => ({ CLOSE_HOUR: cfg('CLOSE_HOUR'), SCHOOL: cfg('SCHOOL'), START: cfg('START'), END: cfg('END'), TZ: cfg('TZ'), MINGAP: cfg('MINGAP') }),
+  setSettings: (d, u) => {
+    if (d.CLOSE_HOUR !== undefined && d.CLOSE_HOUR !== '' && !(Number.isInteger(+d.CLOSE_HOUR) && +d.CLOSE_HOUR >= 0 && +d.CLOSE_HOUR <= 23)) throw new Error("Kunni yopish soati 0 dan 23 gacha butun son bo'lsin");
+    ['SCHOOL', 'START', 'END', 'TZ', 'MINGAP', 'CLOSE_HOUR'].forEach(k => { if (d[k] !== undefined && d[k] !== '') setCfg(k, d[k]); });
+    if (d.CLOSE_HOUR !== undefined && d.CLOSE_HOUR !== '') installTrigger();
+    audit(u, 'setSettings', d);
+  }
 };
-const DEVICE = ['faces', 'photo', 'logEvent', 'heartbeat'];
 
 function route(d) {
   if (d.action === 'login') return login(d);
-  let user = null;
-  if (d.key && d.key === P.getProperty('DEVICE_KEY') && DEVICE.indexOf(d.action) > -1) user = 'device';
-  else { user = CacheService.getScriptCache().get('t:' + d.token); if (!user) throw new Error('AUTH'); }
+  const user = CacheService.getScriptCache().get('t:' + d.token); if (!user) throw new Error('AUTH');
   const f = ACT[d.action]; if (!f) throw new Error("Noma'lum amal");
   return Object.assign({ ok: true }, f(d, user) || {});
 }
@@ -256,3 +246,21 @@ function doPost(e) {
   return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
 }
 function doGet() { return ContentService.createTextOutput(JSON.stringify({ ok: true, service: 'SmartSchool Attendance' })).setMimeType(ContentService.MimeType.JSON); }
+
+
+/* ---------- PAROLNI O'RNATISH (vaqtincha ishlatiladi) ----------
+ * 1) Pastdagi PAROL qiymatiga o'z parolingizni yozing (12+ belgi) — faqat shu bitta joyga
+ * 2) Funksiyalar ro'yxatidan "parol" ni tanlab Run bosing
+ * 3) Ishlagach, PAROL ni 'BU_YERGA_PAROLNI_YOZING' holatiga qaytaring va saqlang (parol kodda qolmasin) */
+function parol() {
+  const LOGIN = 'adminjon';
+  const PAROL = 'BU_YERGA_PAROLNI_YOZING';
+  if (PAROL.indexOf('BU_YERGA') === 0 || PAROL.length < 8) throw new Error('Avval PAROL qiymatini yozing (kamida 8 belgi)');
+  setAdmin(LOGIN, PAROL);
+  Logger.log('Admin yangilandi: ' + LOGIN);
+}
+
+/* Tekshiruv: Run qiling va Execution log'ni ko'ring (parolning o'zi ko'rsatilmaydi) */
+function adminTekshir() {
+  Logger.log('Login: ' + P.getProperty('ADMIN_USER') + ' | salt: ' + (P.getProperty('SALT') ? 'bor' : "YO'Q") + ' | parol saqlangan: ' + (P.getProperty('ADMIN_HASH') ? 'ha' : "YO'Q"));
+}

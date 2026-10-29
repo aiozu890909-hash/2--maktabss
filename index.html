@@ -41,7 +41,7 @@ const ymd=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+Stri
 
 const H11=['Sana','ID','Ism','Familiya','Sinf','Kirish','Chiqish','Kechikish (daq)','Erta ketish (daq)','Holat','Yangilangan'];
 let LOCAL=!SCHOOL_API;
-const dbNew=()=>({students:[],att:[],events:[],cfg:{SCHOOL:'',START:'08:30',END:'13:00',TZ:'brauzer vaqti',MINGAP:'10'},arch:[]});
+const dbNew=()=>({students:[],att:[],events:[],cfg:{SCHOOL:'',CLOSE_HOUR:'0',START:'08:30',END:'13:00',TZ:'brauzer vaqti',MINGAP:'10'},arch:[]});
 const DB=()=>{try{return JSON.parse(localStorage.getItem('ssdb'))||dbNew()}catch(e){return dbNew()}};
 const hms=d=>d.toTimeString().slice(0,8),mn=t=>{const p=String(t).split(':');return +p[0]*60+ +p[1]};
 const comp=(c,i,o)=>{const s=mn(c.START),e=mn(c.END);let late=0,early=0,st="O'z vaqtida";if(i){late=Math.max(0,mn(i)-s);if(late)st='Kechikdi'}if(o){early=Math.max(0,e-mn(o));if(early)st=late?'Kechikdi + Erta ketdi':'Erta ketdi'}return{late,early,st}};
@@ -73,7 +73,7 @@ const LA={
  closeDay:(d,db)=>closeD(db,d.day),
  archive:(d,db)=>({files:db.arch.slice().sort((a,b)=>b.name.localeCompare(a.name)).map(a=>({name:a.name,date:a.date,url:URL.createObjectURL(new Blob([a.csv],{type:'text/csv'}))}))}),
  getSettings:(d,db)=>db.cfg,
- setSettings:(d,db)=>{['SCHOOL','START','END','TZ','MINGAP'].forEach(k=>{if(d[k]!=null)db.cfg[k]=String(d[k])})}
+ setSettings:(d,db)=>{['SCHOOL','START','END','TZ','MINGAP','CLOSE_HOUR'].forEach(k=>{if(d[k]!=null&&d[k]!=='')db.cfg[k]=String(d[k])})}
 };
 async function localApi(a,d){const f=LA[a];if(!f)throw new Error("Noma'lum amal");const db=DB(),ch=autoClose(db),r=f(d,db)||{};
  if(MUT.includes(a)||ch){if(db.events.length>3000)db.events.splice(0,db.events.length-3000);try{localStorage.setItem('ssdb',JSON.stringify(db))}catch(e){throw new Error("Brauzer xotirasi to'ldi yoki ruxsat yo'q")}}return{ok:true,...r}}
@@ -81,23 +81,24 @@ async function sim(){const act=ST.filter(s=>s.active);view(`<h2>Sinov: kamera o'
  <div class="bar"><select id="m1">${act.map(s=>`<option value="${esc(s.id)}">${esc(s.ism+' '+s.familiya+' ('+s.sinf+')')}</option>`).join('')||'<option value="">Avval o\'quvchi qo\'shing</option>'}</select><input type="time" step="1" id="m2" value="${hms(new Date())}"><button class="p" onclick="msim()">Tanildi</button><button onclick="msim(1)">Noma'lum yuz</button></div><div id="mr"></div></div>`)}
 async function msim(u){const id=u?'':$('#m1').value;if(!u&&!id)return;const ts=new Date(ymd(new Date())+'T'+($('#m2').value||'00:00:00').padEnd(8,':00')).getTime();
  const r=await api('logEvent',{eventId:crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random()),studentId:id,ts});$('#mr').innerHTML=`<span class="chip ${(TL[r.type]||[0,'mut'])[1]}">${(TL[r.type]||[r.type||'Takror'])[0]} ${r.time||''}</span>`}
-async function api(a,d={}){if(LOCAL)return localApi(a,d);const r=await fetch(API,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:a,token:TOK,...d})});const j=await r.json();
- if(!j.ok){if(j.error==='AUTH'){lsw(sessionStorage,'ssTok',null);TOK='';start();}throw new Error(j.error)}return j}
+async function api(a,d={}){if(LOCAL)return localApi(a,d);let j;try{const r=await fetch(API,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:a,token:TOK,...d})});const t=await r.text();try{j=JSON.parse(t)}catch(e){throw new Error("Backend JSON qaytarmadi: Apps Script'da Deploy > Web app > Who has access = Anyone bo'lsin va New version qiling")}}catch(e){throw new Error(e.message==='Failed to fetch'?"Backend bilan aloqa yo'q (internetni yoki havolani tekshiring)":e.message)}
+ if(!j.ok){if(j.error==='AUTH'){lsw(sessionStorage,'ssTok',null);TOK='';start();const x=$('#err');if(x)x.textContent='Sessiya tugadi, qayta kiring';}throw new Error(j.error)}return j}
 const chipOf=h=>/Kelmadi/.test(h)?'bad':/Erta/.test(h)?'vio':/Kechik/.test(h)?'warn':h?'ok':'mut';
 const TL={IN:['Kirdi','ok'],OUT:['Chiqdi','vio'],UNKNOWN:["Noma'lum",'bad'],REVIEW:['Tekshirish','warn'],IGNORED:['Takror','mut']};
 const ini=(a,b)=>((a||'?')[0]+(b||'')[0]).toUpperCase();
 const av=(id,a,b)=>`<span class="av" data-av="${esc(id)}">${esc(ini(a,b))}</span>`;
-async function loadAv(){for(const el of document.querySelectorAll('[data-av]')){const s=SM[el.dataset.av];if(!s||!s.photoId)continue;
- try{if(!PH[s.photoId])PH[s.photoId]=api('photo',{photoId:s.photoId}).then(r=>'data:image/jpeg;base64,'+r.data);el.innerHTML=`<img src="${await PH[s.photoId]}">`}catch(e){}}}
+let IO;
+function loadAv(){if(IO)IO.disconnect();IO=new IntersectionObserver(es=>es.forEach(async e=>{if(!e.isIntersecting)return;IO.unobserve(e.target);const el=e.target,s=SM[el.dataset.av];if(!s||!s.photoId)return;
+ try{if(!PH[s.photoId])PH[s.photoId]=api('photo',{photoId:s.photoId}).then(r=>'data:image/jpeg;base64,'+r.data);el.innerHTML=`<img src="${await PH[s.photoId]}">`}catch(x){delete PH[s.photoId]}}),{rootMargin:'100px'});document.querySelectorAll('[data-av]').forEach(el=>IO.observe(el))}
 const view=h=>{$('#view').innerHTML=h;loadAv()};
 const NAV=[['dash','Boshqaruv'],['live','Jonli davomat'],['stu',"O'quvchilar"],['hist','Davomat tarixi'],['rev','Tekshiruv'],['arch','Arxiv'],['set','Sozlamalar']];
 
 function start(){clearInterval(timer);if(!TOK&&!LOCAL){$('#app').innerHTML=`<div id="login" class="card"><h2>${esc(SN)}</h2>
- <input id="u2" placeholder="Login"><input id="u3" type="password" placeholder="Parol">
+ <input id="u2" placeholder="Login"><input id="u3" type="password" placeholder="Parol" onkeydown="if(event.key==='Enter')doLogin()">
  <div id="err"></div><button class="p" onclick="doLogin()" style="width:100%">Kirish</button></div>`;return}
  $('#app').innerHTML=`<aside><h1>${esc(SN)}<small>Face ID davomat</small></h1>${NAV.concat(LOCAL?[['sim','Sinov']]:[]).map(n=>`<a data-p="${n[0]}" onclick="go('${n[0]}')">${n[1]}</a>`).join('')}</aside><main id="view"></main>`;
  Promise.all([api('listStudents'),api('getSettings')]).then(([r,c])=>{if(c.SCHOOL){SN=c.SCHOOL;lsw(localStorage,'ssName',SN)}document.title=SN+' — davomat';$('aside h1').firstChild.textContent=SN;ST=r.students;SM=Object.fromEntries(ST.map(s=>[s.id,s]));go(location.hash.slice(1)||'dash')}).catch(e=>alert(e.message))}
-async function doLogin(){try{const r=await api('login',{user:$('#u2').value,pass:$('#u3').value});TOK=r.token;lsw(sessionStorage,'ssTok',TOK);start()}catch(e){$('#err').textContent=e.message}}
+async function doLogin(){$('#err').textContent='Tekshirilmoqda...';try{const r=await api('login',{user:$('#u2').value,pass:$('#u3').value});TOK=r.token;lsw(sessionStorage,'ssTok',TOK);start()}catch(e){$('#err').textContent=e.message}}
 function go(p){clearInterval(timer);location.hash=p;document.querySelectorAll('aside a').forEach(a=>a.classList.toggle('on',a.dataset.p===p));
  ({dash,live:dash,stu,hist,rev,arch,set,sim})[p]?.(p).catch(e=>view(`<div class="card">${esc(e.message)}</div>`))}
 
@@ -109,7 +110,7 @@ async function dash(p){const draw=async()=>{const t=await api('today'),live=p===
  <div class="card"><div class="l">Kechikkanlar</div><div class="k">${t.late}</div></div><div class="card"><div class="l">Erta ketganlar</div><div class="k">${t.early}</div></div>
  <div class="card"><div class="l">Hali kelmagan</div><div class="k">${t.notYet}</div></div></div>`}
  <div class="card"><b>Oxirgi aniqlanganlar</b><table><tr><th>O'quvchi</th><th>Sinf</th><th>Vaqt</th><th>Holat</th></tr>${evRows(t.recent)||'<tr><td colspan=4>Hozircha hodisa yo\'q</td></tr>'}</table></div>`)};
- await draw();timer=setInterval(()=>draw().catch(()=>{}),10000)}
+ await draw();timer=setInterval(()=>{if(!document.hidden)draw().catch(()=>{})},15000)}
 
 async function stu(){const rend=(q='',c='')=>{const cl=[...new Set(ST.map(s=>s.sinf))].sort();
  view(`<h2>O'quvchilar</h2><div class="bar"><input id="q" placeholder="Qidirish..." value="${esc(q)}" oninput="stu.r(this.value,$('#c').value)"><select id="c" onchange="stu.r($('#q').value,this.value)"><option value="">Barcha sinflar</option>${cl.map(x=>`<option ${x===c?'selected':''}>${esc(x)}</option>`).join('')}</select><span class="sp"></span><button class="p" onclick="sform()">+ O'quvchi qo'shish</button></div>
@@ -141,12 +142,12 @@ async function fix(day,id,i,o){const a=prompt('Kirish vaqti (HH:MM:SS, bo\'sh = 
 
 async function rev(){const r=await api('review');view(`<h2>Tekshiruv</h2><div class="card"><p class="l">Noma'lum yuzlar, takroriy va kunning 3+ aniqlashlari avtomatik yozilmaydi — shu yerda ko'rinadi. Kerak bo'lsa "Davomat tarixi"da qo'lda tuzating.</p>
  <table><tr><th>Vaqt</th><th>O'quvchi</th><th>Sinf</th><th>Turi</th><th>Izoh</th></tr>${r.events.map(e=>`<tr><td>${e.ts}</td><td>${esc(e.name.trim())||'—'}</td><td>${esc(e.sinf)}</td><td><span class="chip ${TL[e.type][1]}">${TL[e.type][0]}</span></td><td>${esc(e.note)}</td></tr>`).join('')||'<tr><td colspan=5>Bo\'sh</td></tr>'}</table></div>`)}
-async function arch(){const r=await api('archive');view(`<h2>Arxiv</h2><div class="bar"><input type="date" id="cd" value="${ymd(new Date(Date.now()-864e5))}"><button class="p" onclick="cday()">Kunni yopish va arxivlash</button><span class="l">Qo'lda yopish (kelmaganlar "Kelmadi" deb belgilanadi). Avtomatik: har kuni 00:00 da oldingi kun yopiladi, arxivlanadi va yangi kunga o'tiladi.</span></div>
+async function arch(){const [r,c]=await Promise.all([api('archive'),api('getSettings')]);view(`<h2>Arxiv</h2><div class="bar"><input type="date" id="cd" value="${ymd(new Date(Date.now()-864e5))}"><button class="p" onclick="cday()">Kunni yopish va arxivlash</button><span class="l">Qo'lda yopish (kelmaganlar "Kelmadi" deb belgilanadi). Avtomatik: har kuni ${String(c.CLOSE_HOUR||0).padStart(2,'0')}:00 da oldingi kun yopiladi, arxivlanadi va yangi kunga o'tiladi.</span></div>
  <div class="card"><table><tr><th>Fayl</th><th>Yangilangan</th></tr>${r.files.map(f=>`<tr><td><a href="${esc(f.url)}" target="_blank" ${f.url.startsWith('blob:')?`download="${esc(f.name)}"`:''}>${esc(f.name)}</a></td><td>${f.date}</td></tr>`).join('')||'<tr><td colspan=2>Arxiv bo\'sh</td></tr>'}</table></div>`)}
 async function cday(){if(!confirm($('#cd').value+' kunini yopib arxivlaysizmi?'))return;const r=await api('closeDay',{day:$('#cd').value});alert('Arxivlandi: '+r.rows+' yozuv');arch()}
-async function set(){const s=await api('getSettings');view(`<h2>Sozlamalar</h2><div class="card"><div class="bar"><label>Maktab nomi <input id="s0" value="${esc(s.SCHOOL||'')}"></label><label>Dars boshi <input id="s1" value="${s.START}" size=6></label><label>Dars oxiri <input id="s2" value="${s.END}" size=6></label><label>Vaqt mintaqasi <input id="s3" value="${s.TZ}"></label><label>Chiqish uchun min. oraliq (daq) <input id="s4" value="${s.MINGAP}" size=4></label><button class="p" onclick="sset()">Saqlash</button></div>
+async function set(){const s=await api('getSettings');view(`<h2>Sozlamalar</h2><div class="card"><div class="bar"><label>Maktab nomi <input id="s0" value="${esc(s.SCHOOL||'')}"></label><label>Dars boshi <input id="s1" value="${s.START}" size=6></label><label>Dars oxiri <input id="s2" value="${s.END}" size=6></label><label>Vaqt mintaqasi <input id="s3" value="${s.TZ}"></label><label>Chiqish uchun min. oraliq (daq) <input id="s4" value="${s.MINGAP}" size=4></label><label>Kunni yopish soati (0-23) <input id="s5" value="${s.CLOSE_HOUR||0}" size=3></label><button class="p" onclick="sset()">Saqlash</button></div>
  <p class="l">${LOCAL?"Mahalliy rejim: ma'lumot faqat shu brauzerda saqlanadi (backend manzili SCHOOL_API bo'sh).":"Backend ulangan."}</p>${LOCAL?'':'<button onclick="lsw(sessionStorage,\'ssTok\',null);lsw(localStorage,\'ssLocal\',null);LOCAL=false;TOK=\'\';start()">Chiqish</button>'}</div>`)}
-async function sset(){await api('setSettings',{SCHOOL:$('#s0').value.trim(),START:$('#s1').value,END:$('#s2').value,TZ:$('#s3').value,MINGAP:$('#s4').value});alert('Saqlandi')}
+async function sset(){await api('setSettings',{SCHOOL:$('#s0').value.trim(),START:$('#s1').value,END:$('#s2').value,TZ:$('#s3').value,MINGAP:$('#s4').value,CLOSE_HOUR:$('#s5').value});alert('Saqlandi')}
 let LD=ymd(new Date());setInterval(()=>{const n=ymd(new Date());if(n!==LD){LD=n;if(TOK||LOCAL)go(location.hash.slice(1)||'dash')}},15000);
 start();
 </script></body></html>

@@ -258,6 +258,10 @@ function parol() {
   if (PAROL.indexOf('BU_YERGA') === 0 || PAROL.length < 8) throw new Error('Avval PAROL qiymatini yozing (kamida 8 belgi)');
   setAdmin(LOGIN, PAROL);
   Logger.log('Admin yangilandi: ' + LOGIN);
+  try { login({ user: LOGIN, pass: PAROL }); Logger.log('Kirish sinovi: MUVAFFAQIYATLI (login va parol shu loyihada to\'g\'ri saqlandi)'); }
+  catch (e) { Logger.log('Kirish sinovi: XATO — ' + e.message); }
+  try { Logger.log('Shu loyihaning web app havolasi: ' + ScriptApp.getService().getUrl() + '  <- saytdagi (index.html 37-qator) havola bilan BIR XIL bo\'lishi kerak'); }
+  catch (e) { Logger.log('Web app hali deploy qilinmagan'); }
 }
 
 /* Tekshiruv: Run qiling va Execution log'ni ko'ring (parolning o'zi ko'rsatilmaydi) */

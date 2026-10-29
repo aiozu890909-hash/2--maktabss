@@ -95,9 +95,13 @@ const NAV=[['dash','Boshqaruv'],['live','Jonli davomat'],['stu',"O'quvchilar"],[
 
 function start(){clearInterval(timer);if(!TOK&&!LOCAL){$('#app').innerHTML=`<div id="login" class="card"><h2>${esc(SN)}</h2>
  <input id="u2" placeholder="Login"><input id="u3" type="password" placeholder="Parol" onkeydown="if(event.key==='Enter')doLogin()">
- <div id="err"></div><button class="p" onclick="doLogin()" style="width:100%">Kirish</button></div>`;return}
+ <div id="err"></div><button class="p" onclick="doLogin()" style="width:100%">Kirish</button><button onclick="diag()" style="width:100%;margin-top:8px">Ulanishni tekshirish</button></div>`;return}
  $('#app').innerHTML=`<aside><h1>${esc(SN)}<small>Face ID davomat</small></h1>${NAV.concat(LOCAL?[['sim','Sinov']]:[]).map(n=>`<a data-p="${n[0]}" onclick="go('${n[0]}')">${n[1]}</a>`).join('')}</aside><main id="view"></main>`;
  Promise.all([api('listStudents'),api('getSettings')]).then(([r,c])=>{if(c.SCHOOL){SN=c.SCHOOL;lsw(localStorage,'ssName',SN)}document.title=SN+' — davomat';$('aside h1').firstChild.textContent=SN;ST=r.students;SM=Object.fromEntries(ST.map(s=>[s.id,s]));go(location.hash.slice(1)||'dash')}).catch(e=>alert(e.message))}
+async function diag(){const e=$('#err'),out=[];e.textContent='Tekshirilmoqda...';
+ try{const r=await fetch(API),t=await r.text();out.push('1) Havola javobi: '+t.slice(0,90))}catch(x){out.push("1) Havolaga ulanib bo'lmadi: "+x.message)}
+ try{const r=await fetch(API,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:'login',user:'__sinov__',pass:'x'})}),t=await r.text();out.push("2) Kirish so'rovi javobi: "+t.slice(0,120))}catch(x){out.push("2) So'rov yuborilmadi: "+x.message)}
+ e.innerHTML=out.map(esc).join('<br>')}
 async function doLogin(){$('#err').textContent='Tekshirilmoqda...';try{const r=await api('login',{user:$('#u2').value,pass:$('#u3').value});TOK=r.token;lsw(sessionStorage,'ssTok',TOK);start()}catch(e){$('#err').textContent=e.message}}
 function go(p){clearInterval(timer);location.hash=p;document.querySelectorAll('aside a').forEach(a=>a.classList.toggle('on',a.dataset.p===p));
  ({dash,live:dash,stu,hist,rev,arch,set,sim})[p]?.(p).catch(e=>view(`<div class="card">${esc(e.message)}</div>`))}

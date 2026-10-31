@@ -164,18 +164,18 @@ function hshow(){const q=$('#h4').value.toLowerCase(),s=$('#h5').value,m=$('#h6'
 /*XL-BEGIN*/
 const nat=(a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true}),mnT=t=>{const p=String(t).split(':');return +p[0]*60+ +p[1]};
 function calc(e,today){const S=mnT((CFG&&CFG.START)||'08:30'),E=mnT((CFG&&CFG.END)||'13:00'),
- late=e.in?Math.max(0,mnT(e.in)-S):0,early=e.out?Math.max(0,E-mnT(e.out)):0,over=e.out?Math.max(0,mnT(e.out)-E):0;let st,c;
+ late=e.in?Math.max(0,mnT(e.in)-S):0,ahead=e.in?Math.max(0,S-mnT(e.in)):0,early=e.out?Math.max(0,E-mnT(e.out)):0,over=e.out?Math.max(0,mnT(e.out)-E):0;let st,c;
  if(!e.in){if(e.date<today){st='Kelmadi';c='bad'}else{st='Hali kelmagan';c='none'}}
- else{const p=[late?`Kechikdi ${late} daq`:"O'z vaqtida"];
+ else{const p=[late?`Kechikdi ${late} daq`:ahead?`${ahead} daq erta keldi`:"O'z vaqtida"];
   if(e.out)p.push(early?`${early} daq erta ketdi`:over?`${over} daq kech ketdi`:'Vaqtida ketdi');else p.push(e.date<today?'chiqish yozilmagan':'maktabda');
   st=p.join(' · ');c=(late||early)?'bad':'ok'}
- return{late,early,over,st,c}}
+ return{late,ahead,early,over,st,c}}
 function entriesFor(rows,students,date){const today=ymd(new Date()),E=[],have={};   // date berilsa: shu kunning to'liq ro'yxati (kelmaganlar bilan)
  rows.forEach(x=>{have[x.Sana+'|'+x.ID]=1;E.push({date:x.Sana,id:x.ID,ism:x.Ism,fam:x.Familiya,sinf:x.Sinf,in:x.Kirish||'',out:x.Chiqish||''})});
  if(date)students.filter(s=>s.active&&!have[date+'|'+s.id]).forEach(s=>E.push({date,id:s.id,ism:s.ism,fam:s.familiya,sinf:s.sinf,in:'',out:''}));
  E.forEach(e=>Object.assign(e,calc(e,today)));return E}
 const byClass=(a,b)=>a.date.localeCompare(b.date)||nat(a.sinf,b.sinf)||(a.in?0:1)-(b.in?0:1)||a.in.localeCompare(b.in)||a.fam.localeCompare(b.fam),
- exRow=e=>({Sinf:e.sinf,Sana:e.date,ID:e.id,Ism:e.ism,Familiya:e.fam,Kirish:e.in,'Kechikish (daq)':e.in?e.late:'',Chiqish:e.out,'Erta ketish (daq)':e.out?e.early:'','Kech ketish (daq)':e.out?e.over:'',Holat:e.st,_c:e.c}),
+ exRow=e=>({Sinf:e.sinf,Sana:e.date,ID:e.id,Ism:e.ism,Familiya:e.fam,Kirish:e.in,'Kechikish (daq)':e.in?e.late:'','Erta kelish (daq)':e.in?e.ahead:'',Chiqish:e.out,'Erta ketish (daq)':e.out?e.early:'','Kech ketish (daq)':e.out?e.over:'',Holat:e.st,_c:e.c}),
  SH={fill:{fgColor:{rgb:'131B2E'}},font:{bold:true,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center'}},
  SR={fill:{fgColor:{rgb:'FFC7CE'}},font:{color:{rgb:'9C0006'}}},SG={fill:{fgColor:{rgb:'C6EFCE'}},font:{color:{rgb:'006100'}}};
 function mkSheet(rows){if(!rows.length)return XLSX.utils.aoa_to_sheet([["Ma'lumot yo'q"]]);
@@ -187,7 +187,7 @@ function mkSheet(rows){if(!rows.length)return XLSX.utils.aoa_to_sheet([["Ma'lumo
 function exportXlsx(E,fname,perClass){if(!E.length)return alert("Ma'lumot yo'q");
  const wb=XLSX.utils.book_new(),add=(n,rows)=>XLSX.utils.book_append_sheet(wb,mkSheet(rows),String(n).replace(/[\\\/?*\[\]:]/g,' ').slice(0,31)),main=E.slice().sort(byClass);
  add('Keldi-ketti',main.map(exRow));
- add('Kelganlar',E.filter(e=>e.in).sort((a,b)=>a.date.localeCompare(b.date)||a.in.localeCompare(b.in)).map((e,i)=>({'№':i+1,Sana:e.date,Sinf:e.sinf,ID:e.id,Ism:e.ism,Familiya:e.fam,Kirish:e.in,'Kechikish (daq)':e.late,Holat:e.st,_c:e.c})));
+ add('Kelganlar',E.filter(e=>e.in).sort((a,b)=>a.date.localeCompare(b.date)||a.in.localeCompare(b.in)).map((e,i)=>({'№':i+1,Sana:e.date,Sinf:e.sinf,ID:e.id,Ism:e.ism,Familiya:e.fam,Kirish:e.in,'Kechikish (daq)':e.late,'Erta kelish (daq)':e.ahead,Holat:e.st,_c:e.c})));
  add('Ketganlar',E.filter(e=>e.out).sort((a,b)=>a.date.localeCompare(b.date)||b.out.localeCompare(a.out)).map((e,i)=>({'№':i+1,Sana:e.date,Sinf:e.sinf,ID:e.id,Ism:e.ism,Familiya:e.fam,Chiqish:e.out,'Erta ketish (daq)':e.early,'Kech ketish (daq)':e.over,Holat:e.st,_c:e.c})));
  add('Kelmaganlar',E.filter(e=>!e.in).sort(byClass).map((e,i)=>({'№':i+1,Sana:e.date,Sinf:e.sinf,ID:e.id,Ism:e.ism,Familiya:e.fam,Holat:e.st,_c:e.c})));
  if(perClass)[...new Set(E.map(e=>e.sinf))].sort(nat).slice(0,40).forEach(c=>add('Sinf '+c,main.filter(e=>e.sinf===c).map(exRow)));
@@ -201,7 +201,7 @@ async function kk(){const cl=[...new Set(ST.filter(s=>s.active).map(s=>s.sinf))]
  <select id="k2" onchange="kshow()"><option value="">Barcha sinflar</option>${cl.map(x=>`<option>${esc(x)}</option>`).join('')}</select>
  <select id="k3" onchange="kshow()"><option value="in">Tartib: kelish vaqti</option><option value="name">Tartib: familiya</option><option value="out">Tartib: ketish vaqti</option></select>
  <input id="k4" placeholder="O'quvchi..." oninput="kshow()"><span class="sp"></span><button class="p" onclick="kxl()">Excel (.xlsx)</button></div>
- <div class="bar"><span class="chip bad">Qizil: kechikkan / erta ketgan / kelmagan</span><span class="chip ok">Yashil: hammasi joyida</span><span class="chip mut">Kulrang: hali kelmagan</span></div><div id="kr"><div class="card">Yuklanmoqda…</div></div>`);
+ <div class="bar"><span class="chip bad">Qizil: kech kelgan / erta ketgan / kelmagan</span><span class="chip ok">Yashil: erta yoki vaqtida kelib, vaqtida yoki kech ketgan</span><span class="chip mut">Kulrang: hali kelmagan</span></div><div id="kr"><div class="card">Yuklanmoqda…</div></div>`);
  await kload();timer=setInterval(()=>{if(!document.hidden&&$('#k1')&&$('#k1').value===ymd(new Date()))kload().catch(()=>{})},15000)}
 function kyest(){const d=new Date();d.setDate(d.getDate()-1);$('#k1').value=ymd(d);kload()}
 async function kload(){const d=$('#k1').value;if(!d)return;const db=Math.round((new Date(ymd(new Date()))-new Date(d))/864e5),last=db>45?0:(Math.max(db,0)+3)*700,
@@ -210,7 +210,7 @@ function kshow(){const c=$('#k2').value,q=$('#k4').value.toLowerCase(),so=$('#k3
  cmp={in:(a,b)=>(a.in?0:1)-(b.in?0:1)||a.in.localeCompare(b.in)||a.fam.localeCompare(b.fam),name:(a,b)=>a.fam.localeCompare(b.fam)||a.ism.localeCompare(b.ism),out:(a,b)=>(a.out?0:1)-(b.out?0:1)||b.out.localeCompare(a.out)||a.fam.localeCompare(b.fam)}[so],g={};
  L.forEach(e=>(g[e.sinf]??=[]).push(e));const bad=L.filter(e=>e.c==='bad').length,ok=L.filter(e=>e.c==='ok').length;
  $('#kr').innerHTML=`<div class="grid"><div class="card"><div class="l">Jami</div><div class="k">${L.length}</div></div><div class="card"><div class="l">Joyida (yashil)</div><div class="k" style="color:#059669">${ok}</div></div><div class="card"><div class="l">Qoidabuzar (qizil)</div><div class="k" style="color:#dc2626">${bad}</div></div><div class="card"><div class="l">Hali kelmagan</div><div class="k">${L.length-bad-ok}</div></div></div>
- <div class="card"><table><tr><th>O'quvchi</th><th>Kirdi</th><th>Kechikish</th><th>Chiqdi</th><th>Ketish</th><th>Holat</th></tr>${Object.keys(g).sort(nat).map(k=>{const A=g[k].sort(cmp);return `<tr class="grp"><td colspan=6>${esc(k)} sinf · ${A.length} o'quvchi · kelgan ${A.filter(e=>e.in).length} · qizil ${A.filter(e=>e.c==='bad').length}</td></tr>`+A.map(e=>`<tr class="r-${e.c}"><td>${av(e.id,e.ism,e.fam)}${esc(e.ism+' '+e.fam)}</td><td>${e.in||'—'}</td><td>${e.in?(e.late?e.late+' daq':'vaqtida'):'—'}</td><td>${e.out||'—'}</td><td>${e.out?(e.early?e.early+' daq erta':e.over?e.over+' daq kech':'vaqtida'):'—'}</td><td><span class="chip ${e.c==='bad'?'bad':e.c==='ok'?'ok':'mut'}">${esc(e.st)}</span></td></tr>`).join('')}).join('')||"<tr><td colspan=6>Ma'lumot yo'q</td></tr>"}</table></div>`;loadAv()}
+ <div class="card"><table><tr><th>O'quvchi</th><th>Kirdi</th><th>Kelish farqi</th><th>Chiqdi</th><th>Ketish farqi</th><th>Holat</th></tr>${Object.keys(g).sort(nat).map(k=>{const A=g[k].sort(cmp);return `<tr class="grp"><td colspan=6>${esc(k)} sinf · ${A.length} o'quvchi · kelgan ${A.filter(e=>e.in).length} · qizil ${A.filter(e=>e.c==='bad').length}</td></tr>`+A.map(e=>`<tr class="r-${e.c}"><td>${av(e.id,e.ism,e.fam)}${esc(e.ism+' '+e.fam)}</td><td>${e.in||'—'}</td><td>${e.in?(e.late?e.late+' daq kech':e.ahead?e.ahead+' daq erta':'vaqtida'):'—'}</td><td>${e.out||'—'}</td><td>${e.out?(e.early?e.early+' daq erta':e.over?e.over+' daq kech':'vaqtida'):'—'}</td><td><span class="chip ${e.c==='bad'?'bad':e.c==='ok'?'ok':'mut'}">${esc(e.st)}</span></td></tr>`).join('')}).join('')||"<tr><td colspan=6>Ma'lumot yo'q</td></tr>"}</table></div>`;loadAv()}
 function kxl(){const c=$('#k2').value;exportXlsx(KR.filter(e=>!c||e.sinf===c),`keldi-ketti_${$('#k1').value}${c?'_'+c:''}.xlsx`,!c)}
 async function dl(){const t=ymd(new Date()),cl=[...new Set(ST.map(s=>s.sinf))].sort(nat);
  view(`<h2>Davomatni yuklab olish</h2><div class="card"><div class="bar"><label>Dan <input type="date" id="d1" value="${t}"></label><label>Gacha <input type="date" id="d2" value="${t}"></label>

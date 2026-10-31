@@ -36,7 +36,7 @@ const lsg=(o,k)=>{try{return o.getItem(k)||''}catch(e){return ''}},lsw=(o,k,v)=>
 /* BITTA MAKTAB UCHUN: backend (Code.gs web app) manzilini shu yerga bir marta yozing. Bo'sh qolsa sayt mahalliy (brauzer) rejimida ishlaydi. */
 const SCHOOL_API='https://script.google.com/macros/s/AKfycbx1r3Fwj9upH77waJT5Vr-O79vXCw2EQDk96Myxif9TX7snplyUbQHxsvjS5Jhlh131/exec';
 let SN=lsg(localStorage,'ssName')||'SmartSchool';
-let API=SCHOOL_API,TOK=lsg(sessionStorage,'ssTok'),ST=[],SM={},timer,PH={};
+let API=SCHOOL_API,TOK=lsg(sessionStorage,'ssTok'),ST=[],SM={},timer,PH={},LAST={},STP=Promise.resolve();
 const ymd=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 
 const H11=['Sana','ID','Ism','Familiya','Sinf','Kirish','Chiqish','Kechikish (daq)','Erta ketish (daq)','Holat','Yangilangan'];
@@ -60,7 +60,7 @@ const LA={
  updateStudent:(d,db)=>{const s=fnd(db,d.id);if(!s)throw new Error('Topilmadi');Object.assign(s,{ism:d.ism||s.ism,familiya:d.familiya||s.familiya,sinf:d.sinf||s.sinf,extra:d.extra??s.extra});if(d.photo)s.photo=d.photo},
  deactivate:(d,db)=>{const s=fnd(db,d.id);if(!s)throw new Error('Topilmadi');s.active=false},
  today:(d,db)=>{const day=ymd(new Date()),rows=db.att.filter(r=>r[0]===day),total=db.students.filter(s=>s.active).length,pr=rows.filter(r=>r[5]).length;
-  return{day,total,present:pr,late:rows.filter(r=>+r[7]>0).length,early:rows.filter(r=>+r[8]>0).length,notYet:Math.max(0,total-pr),recent:db.events.slice(-30).reverse().map(e=>evv(db,e)),hb:{online:false},local:true,drive:true,hours:db.cfg.START+' - '+db.cfg.END}},
+  return{day,total,present:pr,late:rows.filter(r=>+r[7]>0).length,early:rows.filter(r=>+r[8]>0).length,notYet:Math.max(0,total-pr),recent:db.events.filter(e=>e.type==='IN'||e.type==='OUT').slice(-30).reverse().map(e=>evv(db,e)),unk:db.events.filter(e=>(e.type==='UNKNOWN'||e.type==='REVIEW')&&ymd(new Date(e.ts))===day).length,hb:{online:false},local:true,drive:true,hours:db.cfg.START+' - '+db.cfg.END}},
  history:(d,db)=>({head:H11,rows:db.att.filter(r=>(!d.from||r[0]>=d.from)&&(!d.to||r[0]<=d.to)&&(!d.sinf||r[4]===d.sinf)).slice().reverse()}),
  editAttendance:(d,db)=>{const s=fnd(db,d.id);if(!s)throw new Error("O'quvchi topilmadi");const t1=d.in||'',t2=d.out||'',c=t1?comp(db.cfg,t1,t2||null):{late:'',early:'',st:'Kelmadi'},row=[d.day,s.id,s.ism,s.familiya,s.sinf,t1,t2,c.late,t2?c.early:'',c.st,nowS()],i=db.att.findIndex(r=>r[0]===d.day&&r[1]===s.id);i<0?db.att.push(row):db.att[i]=row},
  logEvent:(d,db)=>{if(db.events.some(e=>e.eventId===d.eventId))return{dup:true};const dt=new Date(d.ts),day=ymd(dt),t=hms(dt),s=fnd(db,d.studentId);let type='UNKNOWN',note='';
@@ -81,15 +81,24 @@ async function sim(){const act=ST.filter(s=>s.active);view(`<h2>Sinov: kamera o'
  <div class="bar"><select id="m1">${act.map(s=>`<option value="${esc(s.id)}">${esc(s.ism+' '+s.familiya+' ('+s.sinf+')')}</option>`).join('')||'<option value="">Avval o\'quvchi qo\'shing</option>'}</select><input type="time" step="1" id="m2" value="${hms(new Date())}"><button class="p" onclick="msim()">Tanildi</button><button onclick="msim(1)">Noma'lum yuz</button></div><div id="mr"></div></div>`)}
 async function msim(u){const id=u?'':$('#m1').value;if(!u&&!id)return;const ts=new Date(ymd(new Date())+'T'+($('#m2').value||'00:00:00').padEnd(8,':00')).getTime();
  const r=await api('logEvent',{eventId:crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random()),studentId:id,ts});$('#mr').innerHTML=`<span class="chip ${(TL[r.type]||[0,'mut'])[1]}">${(TL[r.type]||[r.type||'Takror'])[0]} ${r.time||''}</span>`}
-async function api(a,d={}){if(LOCAL)return localApi(a,d);let j;try{const r=await fetch(API,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:a,token:TOK,...d})});const t=await r.text();try{j=JSON.parse(t)}catch(e){throw new Error("Backend JSON qaytarmadi: Apps Script'da Deploy > Web app > Who has access = Anyone bo'lsin va New version qiling")}}catch(e){throw new Error(e.message==='Failed to fetch'?"Backend bilan aloqa yo'q (internetni yoki havolani tekshiring)":e.message)}
+const MC={},CT={listStudents:60000,getSettings:60000,archive:30000},MUTA=['addStudent','updateStudent','deactivate','setSettings','closeDay','editAttendance'];
+async function api(a,d={}){const mut=MUTA.includes(a);if(!mut&&CT[a]&&MC[a]&&Date.now()-MC[a].t<CT[a])return MC[a].v;   // tez-tez o'zgarmaydigan ma'lumot keshlanadi
+ const v=await api0(a,d);if(mut){for(const k in MC)delete MC[k]}else if(CT[a])MC[a]={t:Date.now(),v};return v}
+async function api0(a,d={}){if(LOCAL)return localApi(a,d);let j;try{const r=await fetch(API,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:a,token:TOK,...d})});const t=await r.text();try{j=JSON.parse(t)}catch(e){throw new Error("Backend JSON qaytarmadi: Apps Script'da Deploy > Web app > Who has access = Anyone bo'lsin va New version qiling")}}catch(e){throw new Error(e.message==='Failed to fetch'?"Backend bilan aloqa yo'q (internetni yoki havolani tekshiring)":e.message)}
  if(!j.ok){if(j.error==='AUTH'){lsw(sessionStorage,'ssTok',null);TOK='';start();const x=$('#err');if(x)x.textContent='Sessiya tugadi, qayta kiring';}throw new Error(j.error)}return j}
 const chipOf=h=>/Kelmadi/.test(h)?'bad':/Erta/.test(h)?'vio':/Kechik/.test(h)?'warn':h?'ok':'mut';
 const TL={IN:['Kirdi','ok'],OUT:['Chiqdi','vio'],UNKNOWN:["Noma'lum",'bad'],REVIEW:['Tekshirish','warn'],IGNORED:['Takror','mut']};
-const ini=(a,b)=>((a||'?')[0]+(b||'')[0]).toUpperCase();
+const ini=(a,b)=>((a||'?')[0]+((b||'')[0]||'')).toUpperCase();
 const av=(id,a,b)=>`<span class="av" data-av="${esc(id)}">${esc(ini(a,b))}</span>`;
 let IO;
-function loadAv(){if(IO)IO.disconnect();IO=new IntersectionObserver(es=>es.forEach(async e=>{if(!e.isIntersecting)return;IO.unobserve(e.target);const el=e.target,s=SM[el.dataset.av];if(!s||!s.photoId)return;
- try{if(!PH[s.photoId])PH[s.photoId]=api('photo',{photoId:s.photoId}).then(r=>'data:image/jpeg;base64,'+r.data);el.innerHTML=`<img src="${await PH[s.photoId]}">`}catch(x){delete PH[s.photoId]}}),{rootMargin:'100px'});document.querySelectorAll('[data-av]').forEach(el=>IO.observe(el))}
+const TH=(()=>{try{return JSON.parse(localStorage.getItem('ssTh')||'{}')}catch(e){return {}}})();
+const saveTh=()=>{try{localStorage.setItem('ssTh',JSON.stringify(TH))}catch(e){Object.keys(TH).slice(0,Math.ceil(Object.keys(TH).length/2)).forEach(x=>delete TH[x]);try{localStorage.setItem('ssTh',JSON.stringify(TH))}catch(e2){}}};
+let PQ=0;const PW=[];
+const thumb=u=>new Promise(r=>{const i=new Image();i.onload=()=>{const c=document.createElement('canvas');c.width=c.height=64;const k=Math.max(64/i.width,64/i.height),w=i.width*k,hh=i.height*k;c.getContext('2d').drawImage(i,(64-w)/2,(64-hh)/2,w,hh);r(c.toDataURL('image/jpeg',.7))};i.onerror=()=>r(u);i.src=u});
+function getPhoto(pid){if(!LOCAL&&TH[pid])return Promise.resolve(TH[pid]);   // bir marta yuklanadi, keyin brauzer xotirasidan darhol
+ if(!PH[pid])PH[pid]=(async()=>{while(PQ>=3)await new Promise(r=>PW.push(r));PQ++;try{const r=await api('photo',{photoId:pid}),t=await thumb('data:image/jpeg;base64,'+r.data);if(!LOCAL){TH[pid]=t;saveTh()}return t}finally{PQ--;const n=PW.shift();if(n)n()}})().catch(e=>{delete PH[pid];throw e});return PH[pid]}
+function loadAv(){if(IO)IO.disconnect();IO=new IntersectionObserver(es=>es.forEach(async e=>{if(!e.isIntersecting)return;IO.unobserve(e.target);const el=e.target;await STP;const s=SM[el.dataset.av];if(!s||!s.photoId)return;
+ try{el.innerHTML=`<img src="${await getPhoto(s.photoId)}">`}catch(x){}}),{rootMargin:'100px'});document.querySelectorAll('[data-av]').forEach(el=>IO.observe(el))}
 const view=h=>{$('#view').innerHTML=h;loadAv()};
 const NAV=[['dash','Boshqaruv'],['live','Jonli davomat'],['stu',"O'quvchilar"],['hist','Davomat tarixi'],['rev','Tekshiruv'],['arch','Arxiv'],['set','Sozlamalar']];
 
@@ -97,24 +106,28 @@ function start(){clearInterval(timer);if(!TOK&&!LOCAL){$('#app').innerHTML=`<div
  <input id="u2" placeholder="Login"><input id="u3" type="password" placeholder="Parol" onkeydown="if(event.key==='Enter')doLogin()">
  <div id="err"></div><button class="p" onclick="doLogin()" style="width:100%">Kirish</button><button onclick="diag()" style="width:100%;margin-top:8px">Ulanishni tekshirish</button></div>`;return}
  $('#app').innerHTML=`<aside><h1>${esc(SN)}<small>Face ID davomat</small></h1>${NAV.concat(LOCAL?[['sim','Sinov']]:[]).map(n=>`<a data-p="${n[0]}" onclick="go('${n[0]}')">${n[1]}</a>`).join('')}</aside><main id="view"></main>`;
- Promise.all([api('listStudents'),api('getSettings')]).then(([r,c])=>{if(c.SCHOOL){SN=c.SCHOOL;lsw(localStorage,'ssName',SN)}document.title=SN+' — davomat';$('aside h1').firstChild.textContent=SN;ST=r.students;SM=Object.fromEntries(ST.map(s=>[s.id,s]));go(location.hash.slice(1)||'dash')}).catch(e=>alert(e.message))}
+ STP=Promise.all([api('listStudents'),api('getSettings')]).then(([r,c])=>{if(c.SCHOOL){SN=c.SCHOOL;lsw(localStorage,'ssName',SN)}document.title=SN+' — davomat';const h1=$('aside h1');if(h1)h1.firstChild.textContent=SN;ST=r.students;SM=Object.fromEntries(ST.map(s=>[s.id,s]))}).catch(e=>alert(e.message));
+ go(location.hash.slice(1)||'dash')}
 async function diag(){const e=$('#err'),out=[];e.textContent='Tekshirilmoqda...';
  try{const r=await fetch(API),t=await r.text();out.push('1) Havola javobi: '+t.slice(0,90))}catch(x){out.push("1) Havolaga ulanib bo'lmadi: "+x.message)}
  try{const r=await fetch(API,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:'login',user:'__sinov__',pass:'x'})}),t=await r.text();out.push("2) Kirish so'rovi javobi: "+t.slice(0,120))}catch(x){out.push("2) So'rov yuborilmadi: "+x.message)}
  e.innerHTML=out.map(esc).join('<br>')}
 async function doLogin(){$('#err').textContent='Tekshirilmoqda...';try{const r=await api('login',{user:$('#u2').value,pass:$('#u3').value});TOK=r.token;lsw(sessionStorage,'ssTok',TOK);start()}catch(e){$('#err').textContent=e.message}}
 function go(p){clearInterval(timer);location.hash=p;document.querySelectorAll('aside a').forEach(a=>a.classList.toggle('on',a.dataset.p===p));
- ({dash,live:dash,stu,hist,rev,arch,set,sim})[p]?.(p).catch(e=>view(`<div class="card">${esc(e.message)}</div>`))}
+ if($('#view')&&!(LAST.t&&(p==='dash'||p==='live')))$('#view').innerHTML='<div class="card">Yuklanmoqda…</div>';
+ (async()=>{if(['stu','hist','sim'].includes(p))await STP;return ({dash,live:dash,stu,hist,rev,arch,set,sim})[p]?.(p)})().catch(e=>view(`<div class="card">${esc(e.message)}</div>`))}
 
-const evRows=l=>l.map(e=>{const t=TL[e.type]||[e.type,'mut'];return `<tr><td>${av(e.id,e.ism,e.familiya)}${esc(e.ism+' '+e.familiya)||'<i>Noma\'lum shaxs</i>'}</td><td>${esc(e.sinf)}</td><td>${e.time}</td><td><span class="chip ${t[1]}">${t[0]}</span> ${esc(e.note)}</td></tr>`}).join('');
-async function dash(p){const draw=async()=>{const t=await api('today'),live=p==='live';
+const evRows=l=>l.map(e=>{const t=TL[e.type]||[e.type,'mut'];return `<tr><td>${av(e.id,e.ism,e.familiya)}${esc((e.ism+' '+e.familiya).trim())||'<i>Noma\'lum shaxs</i>'}</td><td>${esc(e.sinf)}</td><td>${e.time}</td><td><span class="chip ${t[1]}">${t[0]}</span> ${esc(e.note)}</td></tr>`}).join('');
+async function dash(p){const live=p==='live',paint=t=>{
  view(`<h2>${live?'Jonli davomat':'Boshqaruv paneli'} <small style="font-size:13px;color:#64748b">${t.day} · dars ${t.hours} · yangi kun 00:00 da</small></h2>
- <div class="bar"><span class="chip ${t.hb.online?'ok':'bad'}">Kamera: ${t.hb.online?'online · '+t.hb.fps+' FPS':'offline'}</span>${t.local?'<span class="chip warn">Mahalliy rejim (brauzer xotirasi)</span>':`<span class="chip ok">Sheets ulangan</span><span class="chip ${t.drive?'ok':'bad'}">Drive ${t.drive?'tayyor':'xato'}</span>`}</div>
+ <div class="bar">${t.unk?`<a class="chip warn" style="cursor:pointer" onclick="go('rev')">Tekshirish kerak: ${t.unk}</a>`:''}<span class="chip ${t.hb.online?'ok':'bad'}">Kamera: ${t.hb.online?'online · '+t.hb.fps+' FPS':'offline'}</span>${t.local?'<span class="chip warn">Mahalliy rejim (brauzer xotirasi)</span>':`<span class="chip ok">Sheets ulangan</span><span class="chip ${t.drive?'ok':'bad'}">Drive ${t.drive?'tayyor':'xato'}</span>`}</div>
  ${live?'':`<div class="grid"><div class="card"><div class="l">Jami o'quvchilar</div><div class="k">${t.total}</div></div><div class="card"><div class="l">Bugun kelganlar</div><div class="k">${t.present}</div></div>
  <div class="card"><div class="l">Kechikkanlar</div><div class="k">${t.late}</div></div><div class="card"><div class="l">Erta ketganlar</div><div class="k">${t.early}</div></div>
  <div class="card"><div class="l">Hali kelmagan</div><div class="k">${t.notYet}</div></div></div>`}
  <div class="card"><b>Oxirgi aniqlanganlar</b><table><tr><th>O'quvchi</th><th>Sinf</th><th>Vaqt</th><th>Holat</th></tr>${evRows(t.recent)||'<tr><td colspan=4>Hozircha hodisa yo\'q</td></tr>'}</table></div>`)};
- await draw();timer=setInterval(()=>{if(!document.hidden)draw().catch(()=>{})},15000)}
+ const draw=async()=>{const t=await api('today');LAST.t=t;paint(t)};
+ if(LAST.t)paint(LAST.t);
+ await draw();timer=setInterval(()=>{if(!document.hidden)draw().catch(()=>{})},p==='live'?6000:12000)}
 
 async function stu(){const rend=(q='',c='')=>{const cl=[...new Set(ST.map(s=>s.sinf))].sort();
  view(`<h2>O'quvchilar</h2><div class="bar"><input id="q" placeholder="Qidirish..." value="${esc(q)}" oninput="stu.r(this.value,$('#c').value)"><select id="c" onchange="stu.r($('#q').value,this.value)"><option value="">Barcha sinflar</option>${cl.map(x=>`<option ${x===c?'selected':''}>${esc(x)}</option>`).join('')}</select><span class="sp"></span><button class="p" onclick="sform()">+ O'quvchi qo'shish</button></div>
@@ -132,16 +145,30 @@ async function deact(id){if(!confirm("O'quvchi faol ro'yxatdan chiqarilsinmi? Ta
 
 async function hist(){const t=ymd(new Date()),cl=[...new Set(ST.map(s=>s.sinf))].sort();
  view(`<h2>Davomat tarixi</h2><div class="bar"><input type="date" id="h1" value="${t}"><input type="date" id="h2" value="${t}"><select id="h3"><option value="">Barcha sinflar</option>${cl.map(x=>`<option>${esc(x)}</option>`).join('')}</select>
- <input id="h4" placeholder="O'quvchi..."><select id="h5"><option value="">Barcha holatlar</option><option>O'z vaqtida</option><option>Kechik</option><option>Erta</option><option>Kelmadi</option></select>
+ <input id="h4" placeholder="O'quvchi..." oninput="hshow()"><select id="h5" onchange="hshow()"><option value="">Barcha holatlar</option><option>O'z vaqtida</option><option>Kechik</option><option>Erta</option><option>Kelmadi</option></select>
+ <select id="h6" onchange="hshow()"><option value="">Tartib: oddiy</option><option value="in">Kelganlar: erta → kech</option><option value="out">Ketganlar: oxirgi → erta</option></select>
  <button onclick="rng(-1)">Kecha</button><button onclick="rng(0)">Bugun</button><button onclick="rng(6)">Hafta</button><button onclick="rng(29)">Oy</button><button class="p" onclick="hload()">Qidirish</button><button onclick="xl()">Excel (.xlsx)</button></div><div id="hr"></div>`);hload()}
 function rng(n){const d=new Date();if(n<0){d.setDate(d.getDate()-1);$('#h1').value=$('#h2').value=ymd(d);return hload()}$('#h2').value=ymd(d);d.setDate(d.getDate()-n);$('#h1').value=ymd(d);hload()}
-let HR=[];
-async function hload(){const r=await api('history',{from:$('#h1').value,to:$('#h2').value,sinf:$('#h3').value}),q=$('#h4').value.toLowerCase(),s=$('#h5').value;
- HR=r.rows.map(v=>Object.fromEntries(r.head.map((h,i)=>[h,v[i]]))).filter(x=>(!q||(x.Ism+x.Familiya+x.ID).toLowerCase().includes(q))&&(!s||x.Holat.includes(s)));
+let HB=[],HR=[];
+const byT=(k,desc)=>(a,b)=>a.Sana.localeCompare(b.Sana)||(desc?b[k].localeCompare(a[k]):a[k].localeCompare(b[k]));
+async function hload(){const db=Math.round((new Date(ymd(new Date()))-new Date($('#h1').value))/864e5),last=db>45?0:(db+3)*700;   // yaqin kunlar uchun jadvalning faqat oxirgi qismi o'qiladi
+ const r=await api('history',{from:$('#h1').value,to:$('#h2').value,sinf:$('#h3').value,last});
+ HB=r.rows.map(v=>Object.fromEntries(r.head.map((h,i)=>[h,v[i]])));hshow()}
+function hshow(){const q=$('#h4').value.toLowerCase(),s=$('#h5').value,m=$('#h6').value;
+ HR=HB.filter(x=>(!q||(x.Ism+x.Familiya+x.ID).toLowerCase().includes(q))&&(!s||x.Holat.includes(s)));
+ if(m==='in')HR=HR.filter(x=>x.Kirish).sort(byT('Kirish'));if(m==='out')HR=HR.filter(x=>x.Chiqish).sort(byT('Chiqish',1));
  const g={};HR.forEach(x=>{const o=g[x.Sinf]??={n:0,l:0,e:0,k:0};o.n++;if(+x['Kechikish (daq)']>0)o.l++;if(+x['Erta ketish (daq)']>0)o.e++;if(x.Holat==='Kelmadi')o.k++});
  $('#hr').innerHTML=`<div class="card"><b>Sinflar kesimi</b><table><tr><th>Sinf</th><th>Yozuvlar</th><th>Kechikkan</th><th>Erta ketgan</th><th>Kelmagan</th></tr>${Object.entries(g).map(([k,o])=>`<tr><td>${esc(k)}</td><td>${o.n}</td><td>${o.l}</td><td>${o.e}</td><td>${o.k}</td></tr>`).join('')}</table></div>
- <div class="card"><table><tr><th>Sana</th><th>O'quvchi</th><th>Sinf</th><th>Kirish</th><th>Chiqish</th><th>Kech. daq</th><th>Erta daq</th><th>Holat</th><th></th></tr>${HR.slice(0,500).map(x=>`<tr><td>${x.Sana}</td><td>${esc(x.Ism+' '+x.Familiya)}</td><td>${esc(x.Sinf)}</td><td>${x.Kirish||'—'}</td><td>${x.Chiqish||'—'}</td><td>${x['Kechikish (daq)']}</td><td>${x['Erta ketish (daq)']}</td><td><span class="chip ${chipOf(x.Holat)}">${esc(x.Holat)}</span></td><td><button onclick="fix('${x.Sana}','${esc(x.ID)}','${x.Kirish}','${x.Chiqish}')">Tuzatish</button></td></tr>`).join('')}</table>${HR.length>500?'<p>Ko\'rsatilgan: 500 ta. To\'liq ro\'yxat Excelda.</p>':''}</div>`}
-function xl(){if(!HR.length)return alert("Ma'lumot yo'q");const ws=XLSX.utils.json_to_sheet(HR),wb=XLSX.utils.book_new();ws['!cols']=Object.keys(HR[0]).map(()=>({wch:18}));XLSX.utils.book_append_sheet(wb,ws,'Davomat');XLSX.writeFile(wb,`davomat_${$('#h1').value}_${$('#h2').value}.xlsx`)}
+ <div class="card"><table><tr><th>Sana</th><th>O'quvchi</th><th>Sinf</th><th>Kirish</th><th>Chiqish</th><th>Kech. daq</th><th>Erta daq</th><th>Holat</th><th></th></tr>${HR.slice(0,500).map(x=>`<tr><td>${x.Sana}</td><td>${esc(x.Ism+' '+x.Familiya)}</td><td>${esc(x.Sinf)}</td><td>${x.Kirish||'—'}</td><td>${x.Chiqish||'—'}</td><td>${x['Kechikish (daq)']}</td><td>${x['Erta ketish (daq)']}</td><td><span class="chip ${chipOf(x.Holat)}">${esc(x.Holat)}</span></td><td><button onclick="fix('${x.Sana}','${esc(x.ID)}','${x.Kirish}','${x.Chiqish}')">Tuzatish</button></td></tr>`).join('')}</table>${HR.length>500?"<p>Ko'rsatilgan: 500 ta. To'liq ro'yxat Excelda.</p>":''}</div>`}
+function xl(){const B=HB;if(!B.length)return alert("Ma'lumot yo'q");
+ const by=(a,b)=>a.Sana.localeCompare(b.Sana)||a.Sinf.localeCompare(b.Sinf)||a.Familiya.localeCompare(b.Familiya)||a.Ism.localeCompare(b.Ism),num=v=>+v||0,
+ kel=B.filter(x=>x.Kirish).sort(byT('Kirish')).map((x,i)=>({'№':i+1,Sana:x.Sana,ID:x.ID,Ism:x.Ism,Familiya:x.Familiya,Sinf:x.Sinf,Kirish:x.Kirish,'Kechikish (daq)':num(x['Kechikish (daq)']),Holat:x.Holat})),
+ ket=B.filter(x=>x.Chiqish).sort(byT('Chiqish',1)).map((x,i)=>({'№':i+1,Sana:x.Sana,ID:x.ID,Ism:x.Ism,Familiya:x.Familiya,Sinf:x.Sinf,Chiqish:x.Chiqish,'Erta ketish (daq)':num(x['Erta ketish (daq)']),Holat:x.Holat})),
+ kelm=B.filter(x=>!x.Kirish).sort(by).map((x,i)=>({'№':i+1,Sana:x.Sana,ID:x.ID,Ism:x.Ism,Familiya:x.Familiya,Sinf:x.Sinf,Holat:x.Holat||'Kelmadi'})),
+ all=B.slice().sort(by),wb=XLSX.utils.book_new();
+ const add=(n,rows)=>{const ws=XLSX.utils.json_to_sheet(rows.length?rows:[{"Ma'lumot":"yo'q"}]);ws['!cols']=Object.keys(rows[0]||{a:1}).map(k=>({wch:k==='№'?5:k==='Holat'?24:k.length>12?17:13}));if(rows.length)ws['!autofilter']={ref:ws['!ref']};XLSX.utils.book_append_sheet(wb,ws,n)};
+ add('Kelganlar',kel);add('Ketganlar',ket);add('Kelmaganlar',kelm);add('Barchasi',all);
+ XLSX.writeFile(wb,`davomat_${$('#h1').value}_${$('#h2').value}.xlsx`)}
 async function fix(day,id,i,o){const a=prompt('Kirish vaqti (HH:MM:SS, bo\'sh = kelmagan):',i);if(a===null)return;const b=a?prompt('Chiqish vaqti (HH:MM:SS, bo\'sh = chiqmagan):',o):'';if(b===null)return;await api('editAttendance',{day,id,in:a,out:b});hload()}
 
 async function rev(){const r=await api('review');view(`<h2>Tekshiruv</h2><div class="card"><p class="l">Noma'lum yuzlar, takroriy va kunning 3+ aniqlashlari avtomatik yozilmaydi — shu yerda ko'rinadi. Kerak bo'lsa "Davomat tarixi"da qo'lda tuzating.</p>

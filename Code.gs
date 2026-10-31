@@ -12,7 +12,7 @@ const SHEET_ID = '';
 const FOLDER_ID = '';
 
 const P = PropertiesService.getScriptProperties();
-const DEF = { START: '08:30', END: '13:00', TZ: 'Asia/Tashkent', MINGAP: '10', SCHOOL: 'Maktab', CLOSE_HOUR: '0' };
+const DEF = { START: '08:30', END: '13:00', TZ: 'Asia/Tashkent', MINGAP: '2', SCHOOL: 'Maktab', CLOSE_HOUR: '0' };
 let _cfg = null;
 const cfg = k => {   // sozlamalar 'Settings' varag'ida (Python ham shuni o'qiydi)
   if (!_cfg) {
@@ -39,6 +39,7 @@ let _ss;
 const SS = () => _ss || (_ss = SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActive());
 const sh = n => SS().getSheetByName(n);
 const fmt = (ts, f) => Utilities.formatDate(new Date(ts), cfg('TZ'), f);
+const secs = t => { const p = String(t).split(':'); return +p[0] * 3600 + +p[1] * 60 + (+p[2] || 0); };
 const mins = t => { const p = String(t).split(':'); return +p[0] * 60 + +p[1]; };
 const nowStr = () => fmt(Date.now(), 'yyyy-MM-dd HH:mm:ss');
 const salt = () => { let s = P.getProperty('SALT'); if (!s) { s = Utilities.getUuid(); P.setProperty('SALT', s); } return s; };
@@ -64,6 +65,8 @@ function setup() {
     setAdmin('admin', pw);
     Logger.log('ADMIN login: admin / ' + pw + '  (parolni setAdmin(login, parol) bilan almashtiring)');
   }
+  if (!P.getProperty('DEVICE_KEY')) P.setProperty('DEVICE_KEY', Utilities.getUuid() + Utilities.getUuid());
+  Logger.log('DEVICE_KEY (Python, JSON siz rejim uchun): ' + P.getProperty('DEVICE_KEY'));
   installTrigger();
   folder(['Faces']);
 }
@@ -108,6 +111,38 @@ function findRow(day, id) {
   return null;
 }
 
+/* ---------- Hodisa yozish (Python 'Apps Script orqali' rejimida; idempotent) ---------- */
+function logEvent(d) {
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const ev = sh('Events'), n = ev.getLastRow();
+    if (n > 1) {
+      const st = Math.max(2, n - 2999);
+      if (ev.getRange(st, 1, n - st + 1, 1).getValues().some(r => r[0] === d.eventId)) return { dup: true };
+    }
+    const day = fmt(d.ts, 'yyyy-MM-dd'), t = fmt(d.ts, 'HH:mm:ss');
+    let type = 'UNKNOWN', note = d.studentId ? '' : String(d.note || '').slice(0, 120);
+    const stu = d.studentId ? students().find(s => s.id === String(d.studentId)) : null;
+    if (stu && stu.active) {
+      const A = sh('Attendance'), r = findRow(day, stu.id);
+      if (!r) {
+        const c = compute(t);
+        A.appendRow([day, stu.id, stu.ism, stu.familiya, stu.sinf, t, '', c.late, '', c.st, nowStr()]);
+        type = 'IN';
+      } else if (r.v[5] && !r.v[6]) {
+        if (secs(t) - secs(r.v[5]) < +cfg('MINGAP') * 60) { type = 'IGNORED'; note = 'juda yaqin takror'; }
+        else {
+          const c = compute(r.v[5], t);
+          A.getRange(r.row, 7, 1, 5).setValues([[t, c.late, c.early, c.st, nowStr()]]);
+          type = 'OUT';
+        }
+      } else { type = 'REVIEW'; note = 'kunning 3+ aniqlashi — admin tekshiradi'; }
+    }
+    ev.appendRow([d.eventId, d.ts, d.studentId || '', type, note]);
+    return { type: type, time: t };
+  } finally { lock.releaseLock(); }
+}
+
 /* ---------- Kunni yopish va arxivlash ---------- */
 function closeDay(day, user) {
   const A = sh('Attendance'), have = {};
@@ -145,7 +180,7 @@ function walk(f, out) {
 }
 
 /* ---------- Auth ---------- */
-function audit(user, action, details) { sh('Audit').appendRow([nowStr(), user, action, JSON.stringify(details || {}).slice(0, 500)]); }
+function audit(user, action, details) { try { sh('Audit').appendRow([nowStr(), user, action, JSON.stringify(details || {}).slice(0, 500)]); } catch (e) {} } // jurnal xatosi asosiy amalni to'xtatmasin
 function login(d) {
   if (d.user === P.getProperty('ADMIN_USER') && hash(String(d.pass || '')) === P.getProperty('ADMIN_HASH')) {
     const tok = Utilities.getUuid() + Utilities.getUuid();
@@ -162,6 +197,10 @@ const ACT = {
     if (!students().some(s => s.photoId === d.photoId)) throw new Error('Rasm topilmadi');
     return { data: Utilities.base64Encode(DriveApp.getFileById(d.photoId).getBlob().getBytes()) };
   },
+  devStudents: () => ({ students: students().filter(s => s.active && s.photoId).map(s => ({ id: s.id, ism: s.ism, familiya: s.familiya, sinf: s.sinf, photoId: s.photoId })) }),
+  devPhoto: d => ACT.photo(d),
+  devApply: d => logEvent(d),
+  devHeartbeat: d => { P.setProperty('HB', JSON.stringify({ t: Date.now(), fps: d.fps, cam: d.cam, host: d.host })); }, // tez (jadvalga yozilmaydi)
   listStudents: () => ({ students: students() }),
   addStudent: (d, u) => {
     const id = String(d.id || '').trim();
@@ -184,24 +223,34 @@ const ACT = {
     audit(u, 'deactivate', { id: s.id }); // tarixiy davomat saqlanadi
   },
   today: () => {
-    const day = fmt(Date.now(), 'yyyy-MM-dd'), rows = attRows(2000).filter(r => r.v[0] === day).map(r => r.v);
-    const total = students().filter(s => s.active).length, present = rows.filter(r => r[5]);
-    const hbT = +cfg('HB_T'), hb = hbT ? { t: hbT, fps: cfg('HB_FPS'), cam: cfg('HB_CAM'), host: cfg('HB_HOST') } : null;
-    let drive = true; try { folder([]); } catch (e) { drive = false; }
-    const ev = sh('Events'), n = ev.getLastRow(), map = {}; students().forEach(s => map[s.id] = s);
-    const recent = n < 2 ? [] : ev.getRange(Math.max(2, n - 29), 1, Math.min(n - 1, 30), 5).getValues().reverse().map(r => {
+    const cc = CacheService.getScriptCache(), hit = cc.get('today');
+    if (hit) return JSON.parse(hit);                      // 5 soniya kesh: bir nechta oyna/so'rov bir xil ishni takrorlamaydi
+    const day = fmt(Date.now(), 'yyyy-MM-dd'), rows = attRows(900).filter(r => r.v[0] === day).map(r => r.v);
+    const stl = students(), total = stl.filter(s => s.active).length, present = rows.filter(r => r[5]);
+    let hbo = null; try { hbo = JSON.parse(P.getProperty('HB') || 'null'); } catch (e) {}
+    const hbT = +cfg('HB_T'); if (hbT && (!hbo || hbT > hbo.t)) hbo = { t: hbT, fps: cfg('HB_FPS'), cam: cfg('HB_CAM'), host: cfg('HB_HOST') };
+    const hb = hbo;
+    let drive = true;
+    if (cc.get('driveok') !== '1') { try { folder([]); cc.put('driveok', '1', 300); } catch (e) { drive = false; } }
+    const ev = sh('Events'), n = ev.getLastRow(), map = {}; stl.forEach(s => map[s.id] = s);
+    const all = n < 2 ? [] : ev.getRange(Math.max(2, n - 149), 1, Math.min(n - 1, 150), 5).getValues().reverse();
+    // Jonli ro'yxatda faqat haqiqiy KIRDI/CHIQDI; noma'lum shaxslar va takrorlar bu yerga yozilmaydi (ular 'Tekshiruv' sahifasida)
+    const recent = all.filter(r => r[3] === 'IN' || r[3] === 'OUT').slice(0, 30).map(r => {
       const s = map[String(r[2])] || {};
       return { ts: r[1], time: fmt(r[1], 'HH:mm:ss'), id: String(r[2]), ism: s.ism || '', familiya: s.familiya || '', sinf: s.sinf || '', type: r[3], note: r[4] };
     });
-    return {
+    const unk = all.filter(r => (r[3] === 'UNKNOWN' || r[3] === 'REVIEW') && fmt(r[1], 'yyyy-MM-dd') === day).length;
+    const res = {
       day: day, total: total, present: present.length, late: rows.filter(r => +r[7] > 0).length,
-      early: rows.filter(r => +r[8] > 0).length, notYet: Math.max(0, total - present.length), recent: recent,
+      early: rows.filter(r => +r[8] > 0).length, notYet: Math.max(0, total - present.length), recent: recent, unk: unk,
       hb: hb ? { online: Date.now() - hb.t < 90000, fps: hb.fps, cam: hb.cam, host: hb.host } : { online: false },
       sheets: true, drive: drive, hours: cfg('START') + ' - ' + cfg('END')
     };
+    cc.put('today', JSON.stringify(res), 5);
+    return res;
   },
   history: d => {
-    const rows = attRows(0).map(r => r.v).filter(v => (!d.from || v[0] >= d.from) && (!d.to || v[0] <= d.to) && (!d.sinf || v[4] === d.sinf));
+    const rows = attRows(+d.last || 0).map(r => r.v).filter(v => (!d.from || v[0] >= d.from) && (!d.to || v[0] <= d.to) && (!d.sinf || v[4] === d.sinf));
     return { head: HEAD.Attendance, rows: rows.reverse() };
   },
   editAttendance: (d, u) => {
@@ -235,9 +284,14 @@ const ACT = {
 
 function route(d) {
   if (d.action === 'login') return login(d);
-  const user = CacheService.getScriptCache().get('t:' + d.token); if (!user) throw new Error('AUTH');
+  let user = null;   // dev* amallar faqat qurilma kaliti bilan (Python, JSON siz rejim); qolganlari faqat admin tokeni bilan
+  if (String(d.action).indexOf('dev') === 0) { if (d.key && d.key === P.getProperty('DEVICE_KEY')) user = 'device'; }
+  else user = CacheService.getScriptCache().get('t:' + d.token);
+  if (!user) throw new Error('AUTH');
   const f = ACT[d.action]; if (!f) throw new Error("Noma'lum amal");
-  return Object.assign({ ok: true }, f(d, user) || {});
+  const out = Object.assign({ ok: true }, f(d, user) || {});
+  if (['today', 'history', 'listStudents', 'getSettings', 'archive', 'review', 'photo', 'devStudents', 'devPhoto', 'devHeartbeat'].indexOf(d.action) < 0) CacheService.getScriptCache().remove('today');
+  return out;
 }
 function doPost(e) {
   let out;
@@ -245,7 +299,7 @@ function doPost(e) {
   catch (err) { out = { ok: false, error: String(err.message || err) }; }
   return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
 }
-function doGet() { return ContentService.createTextOutput(JSON.stringify({ ok: true, service: 'SmartSchool Attendance' })).setMimeType(ContentService.MimeType.JSON); }
+function doGet() { return ContentService.createTextOutput(JSON.stringify({ ok: true, service: 'SmartSchool Attendance', admin: !!P.getProperty('ADMIN_HASH'), device: !!P.getProperty('DEVICE_KEY'), v: 4 })).setMimeType(ContentService.MimeType.JSON); }
 
 
 /* ---------- PAROLNI O'RNATISH (vaqtincha ishlatiladi) ----------
@@ -260,11 +314,18 @@ function parol() {
   Logger.log('Admin yangilandi: ' + LOGIN);
   try { login({ user: LOGIN, pass: PAROL }); Logger.log('Kirish sinovi: MUVAFFAQIYATLI (login va parol shu loyihada to\'g\'ri saqlandi)'); }
   catch (e) { Logger.log('Kirish sinovi: XATO — ' + e.message); }
-  try { Logger.log('Shu loyihaning web app havolasi: ' + ScriptApp.getService().getUrl() + '  <- saytdagi (index.html 37-qator) havola bilan BIR XIL bo\'lishi kerak'); }
-  catch (e) { Logger.log('Web app hali deploy qilinmagan'); }
+  Logger.log("Eslatma: haqiqiy web app havolasi Deploy > Manage deployments ichida (/exec bilan tugaydi). Editor ko'rsatadigan /dev havola sinov uchun, uni saytga yozmang.");
 }
 
 /* Tekshiruv: Run qiling va Execution log'ni ko'ring (parolning o'zi ko'rsatilmaydi) */
 function adminTekshir() {
-  Logger.log('Login: ' + P.getProperty('ADMIN_USER') + ' | salt: ' + (P.getProperty('SALT') ? 'bor' : "YO'Q") + ' | parol saqlangan: ' + (P.getProperty('ADMIN_HASH') ? 'ha' : "YO'Q"));
+  Logger.log('Login: ' + P.getProperty('ADMIN_USER') + ' | salt: ' + (P.getProperty('SALT') ? 'bor' : "YO'Q") + ' | parol saqlangan: ' + (P.getProperty('ADMIN_HASH') ? 'ha' : "YO'Q") + ' | qurilma kaliti: ' + (P.getProperty('DEVICE_KEY') ? 'bor' : "YO'Q (setup() ni ishga tushiring)"));
+  try {
+    const ss = SS();
+    Logger.log('Jadval: ' + ss.getName() + ' | varaqlar: ' + Object.keys(HEAD).map(n => n + (ss.getSheetByName(n) ? ' bor' : " YO'Q (setup() ni ishga tushiring)")).join(', '));
+  } catch (e) { Logger.log("Jadval ochilmadi — SHEET_ID yoki ruxsatni tekshiring: " + e.message); }
+  try { Logger.log('Drive papka: ' + ROOT().getName()); } catch (e) { Logger.log("Drive papka ochilmadi — FOLDER_ID yoki ruxsatni tekshiring: " + e.message); }
 }
+
+/* Python (JSON siz rejim) uchun kalitni logda ko'rsatadi */
+function kalit() { Logger.log('DEVICE_KEY: ' + P.getProperty('DEVICE_KEY')); }

@@ -2,7 +2,7 @@
 <html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>SmartSchool Attendance</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <style>
 :root{color-scheme:light dark;--bg:#f8f9ff;--ink:#0b1c30;--mut:#45464d;--line:#e2e8f0;--navy:#131b2e;--blue:#0051d5;--card:#fff;--th:#f8fafc;--hov:#f1f5f9;--inp:#fff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0b1220;--ink:#e5eeff;--mut:#9fb0c8;--line:#26334a;--navy:#070c17;--card:#121b2e;--th:#16213a;--hov:#1a2640;--inp:#0f1830}}
@@ -23,6 +23,7 @@ button{font:inherit;font-weight:500;border:1px solid var(--line);background:var(
 button.p{background:#2563eb;border-color:#2563eb;color:#fff}button.p:hover{background:#1d4ed8}button.d{background:#ef4444;border-color:#ef4444;color:#fff}
 input,select{font:inherit;padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;background:var(--inp);color:var(--ink);max-width:100%}input:focus,select:focus{outline:0;border-color:#2563eb;box-shadow:0 0 0 3px #2563eb26}
 .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}.sp{flex:1}
+.r-bad td{background:rgba(220,38,38,.13)}.r-ok td{background:rgba(5,150,105,.11)}.grp td{background:var(--th);font-weight:600;color:var(--mut)}
 .av{display:inline-flex;width:32px;height:32px;border-radius:50%;background:#dce9ff;color:#003ea8;align-items:center;justify-content:center;font-size:11px;font-weight:600;vertical-align:middle;margin-right:8px;overflow:hidden}.av img{width:100%;height:100%;object-fit:cover}
 dialog{background:var(--card);color:var(--ink);border:1px solid #94a3b8;border-radius:16px;padding:24px;width:min(460px,92vw)}dialog::backdrop{background:#0f172a99}
 dialog label{display:block;margin:10px 0 4px;font-size:12px;font-weight:500;color:var(--mut)}dialog input{width:100%}
@@ -36,7 +37,7 @@ const lsg=(o,k)=>{try{return o.getItem(k)||''}catch(e){return ''}},lsw=(o,k,v)=>
 /* BITTA MAKTAB UCHUN: backend (Code.gs web app) manzilini shu yerga bir marta yozing. Bo'sh qolsa sayt mahalliy (brauzer) rejimida ishlaydi. */
 const SCHOOL_API='https://script.google.com/macros/s/AKfycbx1r3Fwj9upH77waJT5Vr-O79vXCw2EQDk96Myxif9TX7snplyUbQHxsvjS5Jhlh131/exec';
 let SN=lsg(localStorage,'ssName')||'SmartSchool';
-let API=SCHOOL_API,TOK=lsg(sessionStorage,'ssTok'),ST=[],SM={},timer,PH={},LAST={},STP=Promise.resolve();
+let API=SCHOOL_API,TOK=lsg(sessionStorage,'ssTok'),ST=[],SM={},timer,PH={},LAST={},STP=Promise.resolve(),CFG=null;
 const ymd=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 
 const H11=['Sana','ID','Ism','Familiya','Sinf','Kirish','Chiqish','Kechikish (daq)','Erta ketish (daq)','Holat','Yangilangan'];
@@ -100,13 +101,13 @@ function getPhoto(pid){if(!LOCAL&&TH[pid])return Promise.resolve(TH[pid]);   // 
 function loadAv(){if(IO)IO.disconnect();IO=new IntersectionObserver(es=>es.forEach(async e=>{if(!e.isIntersecting)return;IO.unobserve(e.target);const el=e.target;await STP;const s=SM[el.dataset.av];if(!s||!s.photoId)return;
  try{el.innerHTML=`<img src="${await getPhoto(s.photoId)}">`}catch(x){}}),{rootMargin:'100px'});document.querySelectorAll('[data-av]').forEach(el=>IO.observe(el))}
 const view=h=>{$('#view').innerHTML=h;loadAv()};
-const NAV=[['dash','Boshqaruv'],['live','Jonli davomat'],['stu',"O'quvchilar"],['hist','Davomat tarixi'],['rev','Tekshiruv'],['arch','Arxiv'],['set','Sozlamalar']];
+const NAV=[['dash','Boshqaruv'],['live','Jonli davomat'],['kk','Keldi-ketti'],['stu',"O'quvchilar"],['hist','Davomat tarixi'],['dl','Yuklab olish'],['rev','Tekshiruv'],['arch','Arxiv'],['set','Sozlamalar']];
 
 function start(){clearInterval(timer);if(!TOK&&!LOCAL){$('#app').innerHTML=`<div id="login" class="card"><h2>${esc(SN)}</h2>
  <input id="u2" placeholder="Login"><input id="u3" type="password" placeholder="Parol" onkeydown="if(event.key==='Enter')doLogin()">
  <div id="err"></div><button class="p" onclick="doLogin()" style="width:100%">Kirish</button><button onclick="diag()" style="width:100%;margin-top:8px">Ulanishni tekshirish</button></div>`;return}
  $('#app').innerHTML=`<aside><h1>${esc(SN)}<small>Face ID davomat</small></h1>${NAV.concat(LOCAL?[['sim','Sinov']]:[]).map(n=>`<a data-p="${n[0]}" onclick="go('${n[0]}')">${n[1]}</a>`).join('')}</aside><main id="view"></main>`;
- STP=Promise.all([api('listStudents'),api('getSettings')]).then(([r,c])=>{if(c.SCHOOL){SN=c.SCHOOL;lsw(localStorage,'ssName',SN)}document.title=SN+' — davomat';const h1=$('aside h1');if(h1)h1.firstChild.textContent=SN;ST=r.students;SM=Object.fromEntries(ST.map(s=>[s.id,s]))}).catch(e=>alert(e.message));
+ STP=Promise.all([api('listStudents'),api('getSettings')]).then(([r,c])=>{if(c.SCHOOL){SN=c.SCHOOL;lsw(localStorage,'ssName',SN)}document.title=SN+' — davomat';const h1=$('aside h1');if(h1)h1.firstChild.textContent=SN;ST=r.students;CFG=c;SM=Object.fromEntries(ST.map(s=>[s.id,s]))}).catch(e=>alert(e.message));
  go(location.hash.slice(1)||'dash')}
 async function diag(){const e=$('#err'),out=[];e.textContent='Tekshirilmoqda...';
  try{const r=await fetch(API),t=await r.text();out.push('1) Havola javobi: '+t.slice(0,90))}catch(x){out.push("1) Havolaga ulanib bo'lmadi: "+x.message)}
@@ -115,7 +116,7 @@ async function diag(){const e=$('#err'),out=[];e.textContent='Tekshirilmoqda...'
 async function doLogin(){$('#err').textContent='Tekshirilmoqda...';try{const r=await api('login',{user:$('#u2').value,pass:$('#u3').value});TOK=r.token;lsw(sessionStorage,'ssTok',TOK);start()}catch(e){$('#err').textContent=e.message}}
 function go(p){clearInterval(timer);location.hash=p;document.querySelectorAll('aside a').forEach(a=>a.classList.toggle('on',a.dataset.p===p));
  if($('#view')&&!(LAST.t&&(p==='dash'||p==='live')))$('#view').innerHTML='<div class="card">Yuklanmoqda…</div>';
- (async()=>{if(['stu','hist','sim'].includes(p))await STP;return ({dash,live:dash,stu,hist,rev,arch,set,sim})[p]?.(p)})().catch(e=>view(`<div class="card">${esc(e.message)}</div>`))}
+ (async()=>{if(['stu','hist','sim','kk','dl'].includes(p))await STP;return ({dash,live:dash,stu,hist,rev,arch,set,sim,kk,dl})[p]?.(p)})().catch(e=>view(`<div class="card">${esc(e.message)}</div>`))}
 
 const evRows=l=>l.map(e=>{const t=TL[e.type]||[e.type,'mut'];return `<tr><td>${av(e.id,e.ism,e.familiya)}${esc((e.ism+' '+e.familiya).trim())||'<i>Noma\'lum shaxs</i>'}</td><td>${esc(e.sinf)}</td><td>${e.time}</td><td><span class="chip ${t[1]}">${t[0]}</span> ${esc(e.note)}</td></tr>`}).join('');
 async function dash(p){const live=p==='live',paint=t=>{
@@ -159,16 +160,70 @@ function hshow(){const q=$('#h4').value.toLowerCase(),s=$('#h5').value,m=$('#h6'
  if(m==='in')HR=HR.filter(x=>x.Kirish).sort(byT('Kirish'));if(m==='out')HR=HR.filter(x=>x.Chiqish).sort(byT('Chiqish',1));
  const g={};HR.forEach(x=>{const o=g[x.Sinf]??={n:0,l:0,e:0,k:0};o.n++;if(+x['Kechikish (daq)']>0)o.l++;if(+x['Erta ketish (daq)']>0)o.e++;if(x.Holat==='Kelmadi')o.k++});
  $('#hr').innerHTML=`<div class="card"><b>Sinflar kesimi</b><table><tr><th>Sinf</th><th>Yozuvlar</th><th>Kechikkan</th><th>Erta ketgan</th><th>Kelmagan</th></tr>${Object.entries(g).map(([k,o])=>`<tr><td>${esc(k)}</td><td>${o.n}</td><td>${o.l}</td><td>${o.e}</td><td>${o.k}</td></tr>`).join('')}</table></div>
- <div class="card"><table><tr><th>Sana</th><th>O'quvchi</th><th>Sinf</th><th>Kirish</th><th>Chiqish</th><th>Kech. daq</th><th>Erta daq</th><th>Holat</th><th></th></tr>${HR.slice(0,500).map(x=>`<tr><td>${x.Sana}</td><td>${esc(x.Ism+' '+x.Familiya)}</td><td>${esc(x.Sinf)}</td><td>${x.Kirish||'—'}</td><td>${x.Chiqish||'—'}</td><td>${x['Kechikish (daq)']}</td><td>${x['Erta ketish (daq)']}</td><td><span class="chip ${chipOf(x.Holat)}">${esc(x.Holat)}</span></td><td><button onclick="fix('${x.Sana}','${esc(x.ID)}','${x.Kirish}','${x.Chiqish}')">Tuzatish</button></td></tr>`).join('')}</table>${HR.length>500?"<p>Ko'rsatilgan: 500 ta. To'liq ro'yxat Excelda.</p>":''}</div>`}
-function xl(){const B=HB;if(!B.length)return alert("Ma'lumot yo'q");
- const by=(a,b)=>a.Sana.localeCompare(b.Sana)||a.Sinf.localeCompare(b.Sinf)||a.Familiya.localeCompare(b.Familiya)||a.Ism.localeCompare(b.Ism),num=v=>+v||0,
- kel=B.filter(x=>x.Kirish).sort(byT('Kirish')).map((x,i)=>({'№':i+1,Sana:x.Sana,ID:x.ID,Ism:x.Ism,Familiya:x.Familiya,Sinf:x.Sinf,Kirish:x.Kirish,'Kechikish (daq)':num(x['Kechikish (daq)']),Holat:x.Holat})),
- ket=B.filter(x=>x.Chiqish).sort(byT('Chiqish',1)).map((x,i)=>({'№':i+1,Sana:x.Sana,ID:x.ID,Ism:x.Ism,Familiya:x.Familiya,Sinf:x.Sinf,Chiqish:x.Chiqish,'Erta ketish (daq)':num(x['Erta ketish (daq)']),Holat:x.Holat})),
- kelm=B.filter(x=>!x.Kirish).sort(by).map((x,i)=>({'№':i+1,Sana:x.Sana,ID:x.ID,Ism:x.Ism,Familiya:x.Familiya,Sinf:x.Sinf,Holat:x.Holat||'Kelmadi'})),
- all=B.slice().sort(by),wb=XLSX.utils.book_new();
- const add=(n,rows)=>{const ws=XLSX.utils.json_to_sheet(rows.length?rows:[{"Ma'lumot":"yo'q"}]);ws['!cols']=Object.keys(rows[0]||{a:1}).map(k=>({wch:k==='№'?5:k==='Holat'?24:k.length>12?17:13}));if(rows.length)ws['!autofilter']={ref:ws['!ref']};XLSX.utils.book_append_sheet(wb,ws,n)};
- add('Kelganlar',kel);add('Ketganlar',ket);add('Kelmaganlar',kelm);add('Barchasi',all);
- XLSX.writeFile(wb,`davomat_${$('#h1').value}_${$('#h2').value}.xlsx`)}
+ <div class="card"><table><tr><th>Sana</th><th>O'quvchi</th><th>Sinf</th><th>Kirish</th><th>Chiqish</th><th>Kech. daq</th><th>Erta daq</th><th>Holat</th><th></th></tr>${HR.slice(0,500).map(x=>`<tr class="r-${calc({in:x.Kirish||'',out:x.Chiqish||'',date:x.Sana},ymd(new Date())).c}"><td>${x.Sana}</td><td>${esc(x.Ism+' '+x.Familiya)}</td><td>${esc(x.Sinf)}</td><td>${x.Kirish||'—'}</td><td>${x.Chiqish||'—'}</td><td>${x['Kechikish (daq)']}</td><td>${x['Erta ketish (daq)']}</td><td><span class="chip ${chipOf(x.Holat)}">${esc(x.Holat)}</span></td><td><button onclick="fix('${x.Sana}','${esc(x.ID)}','${x.Kirish}','${x.Chiqish}')">Tuzatish</button></td></tr>`).join('')}</table>${HR.length>500?"<p>Ko'rsatilgan: 500 ta. To'liq ro'yxat Excelda.</p>":''}</div>`}
+/*XL-BEGIN*/
+const nat=(a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true}),mnT=t=>{const p=String(t).split(':');return +p[0]*60+ +p[1]};
+function calc(e,today){const S=mnT((CFG&&CFG.START)||'08:30'),E=mnT((CFG&&CFG.END)||'13:00'),
+ late=e.in?Math.max(0,mnT(e.in)-S):0,early=e.out?Math.max(0,E-mnT(e.out)):0,over=e.out?Math.max(0,mnT(e.out)-E):0;let st,c;
+ if(!e.in){if(e.date<today){st='Kelmadi';c='bad'}else{st='Hali kelmagan';c='none'}}
+ else{const p=[late?`Kechikdi ${late} daq`:"O'z vaqtida"];
+  if(e.out)p.push(early?`${early} daq erta ketdi`:over?`${over} daq kech ketdi`:'Vaqtida ketdi');else p.push(e.date<today?'chiqish yozilmagan':'maktabda');
+  st=p.join(' · ');c=(late||early)?'bad':'ok'}
+ return{late,early,over,st,c}}
+function entriesFor(rows,students,date){const today=ymd(new Date()),E=[],have={};   // date berilsa: shu kunning to'liq ro'yxati (kelmaganlar bilan)
+ rows.forEach(x=>{have[x.Sana+'|'+x.ID]=1;E.push({date:x.Sana,id:x.ID,ism:x.Ism,fam:x.Familiya,sinf:x.Sinf,in:x.Kirish||'',out:x.Chiqish||''})});
+ if(date)students.filter(s=>s.active&&!have[date+'|'+s.id]).forEach(s=>E.push({date,id:s.id,ism:s.ism,fam:s.familiya,sinf:s.sinf,in:'',out:''}));
+ E.forEach(e=>Object.assign(e,calc(e,today)));return E}
+const byClass=(a,b)=>a.date.localeCompare(b.date)||nat(a.sinf,b.sinf)||(a.in?0:1)-(b.in?0:1)||a.in.localeCompare(b.in)||a.fam.localeCompare(b.fam),
+ exRow=e=>({Sinf:e.sinf,Sana:e.date,ID:e.id,Ism:e.ism,Familiya:e.fam,Kirish:e.in,'Kechikish (daq)':e.in?e.late:'',Chiqish:e.out,'Erta ketish (daq)':e.out?e.early:'','Kech ketish (daq)':e.out?e.over:'',Holat:e.st,_c:e.c}),
+ SH={fill:{fgColor:{rgb:'131B2E'}},font:{bold:true,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center'}},
+ SR={fill:{fgColor:{rgb:'FFC7CE'}},font:{color:{rgb:'9C0006'}}},SG={fill:{fgColor:{rgb:'C6EFCE'}},font:{color:{rgb:'006100'}}};
+function mkSheet(rows){if(!rows.length)return XLSX.utils.aoa_to_sheet([["Ma'lumot yo'q"]]);
+ const keys=Object.keys(rows[0]).filter(k=>k[0]!=='_'),ws=XLSX.utils.aoa_to_sheet([keys,...rows.map(r=>keys.map(k=>r[k]??''))]),
+ cell=(r,c)=>{const a=XLSX.utils.encode_cell({r,c});return ws[a]||(ws[a]={t:'s',v:''})};
+ keys.forEach((k,c)=>{cell(0,c).s=SH});
+ rows.forEach((r,i)=>{const s=r._c==='bad'?SR:r._c==='ok'?SG:null;if(s)keys.forEach((k,c)=>{cell(i+1,c).s=s})});
+ ws['!cols']=keys.map(k=>({wch:k==='№'?5:k==='Holat'?34:Math.max(11,k.length+2)}));ws['!autofilter']={ref:ws['!ref']};return ws}
+function exportXlsx(E,fname,perClass){if(!E.length)return alert("Ma'lumot yo'q");
+ const wb=XLSX.utils.book_new(),add=(n,rows)=>XLSX.utils.book_append_sheet(wb,mkSheet(rows),String(n).replace(/[\\\/?*\[\]:]/g,' ').slice(0,31)),main=E.slice().sort(byClass);
+ add('Keldi-ketti',main.map(exRow));
+ add('Kelganlar',E.filter(e=>e.in).sort((a,b)=>a.date.localeCompare(b.date)||a.in.localeCompare(b.in)).map((e,i)=>({'№':i+1,Sana:e.date,Sinf:e.sinf,ID:e.id,Ism:e.ism,Familiya:e.fam,Kirish:e.in,'Kechikish (daq)':e.late,Holat:e.st,_c:e.c})));
+ add('Ketganlar',E.filter(e=>e.out).sort((a,b)=>a.date.localeCompare(b.date)||b.out.localeCompare(a.out)).map((e,i)=>({'№':i+1,Sana:e.date,Sinf:e.sinf,ID:e.id,Ism:e.ism,Familiya:e.fam,Chiqish:e.out,'Erta ketish (daq)':e.early,'Kech ketish (daq)':e.over,Holat:e.st,_c:e.c})));
+ add('Kelmaganlar',E.filter(e=>!e.in).sort(byClass).map((e,i)=>({'№':i+1,Sana:e.date,Sinf:e.sinf,ID:e.id,Ism:e.ism,Familiya:e.fam,Holat:e.st,_c:e.c})));
+ if(perClass)[...new Set(E.map(e=>e.sinf))].sort(nat).slice(0,40).forEach(c=>add('Sinf '+c,main.filter(e=>e.sinf===c).map(exRow)));
+ add('Izoh',[{Rang:'Qizil',"Ma'nosi":"Kechikib kelgan, erta ketgan yoki kelmagan",_c:'bad'},{Rang:'Yashil',"Ma'nosi":"Hammasi joyida (vaqtida kelgan, vaqtida yoki kech ketgan)",_c:'ok'},{Rang:'Rangsiz',"Ma'nosi":"Hali kelmagan (kun davom etmoqda)"}]);
+ XLSX.writeFile(wb,fname)}
+/*XL-END*/
+function xl(){const c=$('#h3').value;exportXlsx(entriesFor(HB,ST.filter(s=>!c||s.sinf===c),$('#h1').value===$('#h2').value?$('#h1').value:null),`davomat_${$('#h1').value}_${$('#h2').value}${c?'_'+c:''}.xlsx`,!c)}
+let KR=[];
+async function kk(){const cl=[...new Set(ST.filter(s=>s.active).map(s=>s.sinf))].sort(nat);
+ view(`<h2>Keldi-ketti</h2><div class="bar"><input type="date" id="k1" value="${ymd(new Date())}" onchange="kload()"><button onclick="$('#k1').value=ymd(new Date());kload()">Bugun</button><button onclick="kyest()">Kecha</button>
+ <select id="k2" onchange="kshow()"><option value="">Barcha sinflar</option>${cl.map(x=>`<option>${esc(x)}</option>`).join('')}</select>
+ <select id="k3" onchange="kshow()"><option value="in">Tartib: kelish vaqti</option><option value="name">Tartib: familiya</option><option value="out">Tartib: ketish vaqti</option></select>
+ <input id="k4" placeholder="O'quvchi..." oninput="kshow()"><span class="sp"></span><button class="p" onclick="kxl()">Excel (.xlsx)</button></div>
+ <div class="bar"><span class="chip bad">Qizil: kechikkan / erta ketgan / kelmagan</span><span class="chip ok">Yashil: hammasi joyida</span><span class="chip mut">Kulrang: hali kelmagan</span></div><div id="kr"><div class="card">Yuklanmoqda…</div></div>`);
+ await kload();timer=setInterval(()=>{if(!document.hidden&&$('#k1')&&$('#k1').value===ymd(new Date()))kload().catch(()=>{})},15000)}
+function kyest(){const d=new Date();d.setDate(d.getDate()-1);$('#k1').value=ymd(d);kload()}
+async function kload(){const d=$('#k1').value;if(!d)return;const db=Math.round((new Date(ymd(new Date()))-new Date(d))/864e5),last=db>45?0:(Math.max(db,0)+3)*700,
+ r=await api('history',{from:d,to:d,sinf:'',last}),rows=r.rows.map(v=>Object.fromEntries(r.head.map((h,i)=>[h,v[i]])));KR=entriesFor(rows,ST,d);kshow()}
+function kshow(){const c=$('#k2').value,q=$('#k4').value.toLowerCase(),so=$('#k3').value,L=KR.filter(e=>(!c||e.sinf===c)&&(!q||(e.ism+e.fam+e.id).toLowerCase().includes(q))),
+ cmp={in:(a,b)=>(a.in?0:1)-(b.in?0:1)||a.in.localeCompare(b.in)||a.fam.localeCompare(b.fam),name:(a,b)=>a.fam.localeCompare(b.fam)||a.ism.localeCompare(b.ism),out:(a,b)=>(a.out?0:1)-(b.out?0:1)||b.out.localeCompare(a.out)||a.fam.localeCompare(b.fam)}[so],g={};
+ L.forEach(e=>(g[e.sinf]??=[]).push(e));const bad=L.filter(e=>e.c==='bad').length,ok=L.filter(e=>e.c==='ok').length;
+ $('#kr').innerHTML=`<div class="grid"><div class="card"><div class="l">Jami</div><div class="k">${L.length}</div></div><div class="card"><div class="l">Joyida (yashil)</div><div class="k" style="color:#059669">${ok}</div></div><div class="card"><div class="l">Qoidabuzar (qizil)</div><div class="k" style="color:#dc2626">${bad}</div></div><div class="card"><div class="l">Hali kelmagan</div><div class="k">${L.length-bad-ok}</div></div></div>
+ <div class="card"><table><tr><th>O'quvchi</th><th>Kirdi</th><th>Kechikish</th><th>Chiqdi</th><th>Ketish</th><th>Holat</th></tr>${Object.keys(g).sort(nat).map(k=>{const A=g[k].sort(cmp);return `<tr class="grp"><td colspan=6>${esc(k)} sinf · ${A.length} o'quvchi · kelgan ${A.filter(e=>e.in).length} · qizil ${A.filter(e=>e.c==='bad').length}</td></tr>`+A.map(e=>`<tr class="r-${e.c}"><td>${av(e.id,e.ism,e.fam)}${esc(e.ism+' '+e.fam)}</td><td>${e.in||'—'}</td><td>${e.in?(e.late?e.late+' daq':'vaqtida'):'—'}</td><td>${e.out||'—'}</td><td>${e.out?(e.early?e.early+' daq erta':e.over?e.over+' daq kech':'vaqtida'):'—'}</td><td><span class="chip ${e.c==='bad'?'bad':e.c==='ok'?'ok':'mut'}">${esc(e.st)}</span></td></tr>`).join('')}).join('')||"<tr><td colspan=6>Ma'lumot yo'q</td></tr>"}</table></div>`;loadAv()}
+function kxl(){const c=$('#k2').value;exportXlsx(KR.filter(e=>!c||e.sinf===c),`keldi-ketti_${$('#k1').value}${c?'_'+c:''}.xlsx`,!c)}
+async function dl(){const t=ymd(new Date()),cl=[...new Set(ST.map(s=>s.sinf))].sort(nat);
+ view(`<h2>Davomatni yuklab olish</h2><div class="card"><div class="bar"><label>Dan <input type="date" id="d1" value="${t}"></label><label>Gacha <input type="date" id="d2" value="${t}"></label>
+ <button onclick="drng(-1)">Kecha</button><button onclick="drng(0)">Bugun</button><button onclick="drng(6)">Oxirgi 7 kun</button><button onclick="drng(29)">Oxirgi 30 kun</button></div>
+ <div class="bar"><select id="d3"><option value="">Barcha sinflar</option>${cl.map(x=>`<option>${esc(x)}</option>`).join('')}</select><label><input type="checkbox" id="d4" checked> Har bir sinf alohida varaqda</label><button class="p" id="d5" onclick="dgo()">Excel (.xlsx) yuklab olish</button></div>
+ <p class="l">Fayl varaqlari: <b>Keldi-ketti</b> (sinflar bo'yicha), <b>Kelganlar</b> (eng erta → eng kech), <b>Ketganlar</b> (eng oxirgi → eng erta), <b>Kelmaganlar</b> va har bir sinf varag'i. Qizil: kechikkan, erta ketgan yoki kelmagan; yashil: hammasi joyida. Bir kun tanlansa kelmaganlar ham ro'yxatga qo'shiladi.</p></div>`)}
+function drng(n){const d=new Date();if(n<0){d.setDate(d.getDate()-1);$('#d1').value=$('#d2').value=ymd(d);return}$('#d2').value=ymd(d);d.setDate(d.getDate()-n);$('#d1').value=ymd(d)}
+async function dgo(){const b=$('#d5');b.disabled=true;b.textContent='Tayyorlanmoqda…';
+ try{const f=$('#d1').value,t=$('#d2').value,c=$('#d3').value;if(!f||!t||f>t)throw new Error("Sanalarni to'g'ri tanlang");
+  const db=Math.round((new Date(ymd(new Date()))-new Date(f))/864e5),last=db>45?0:(db+3)*700,r=await api('history',{from:f,to:t,sinf:c,last}),
+  rows=r.rows.map(v=>Object.fromEntries(r.head.map((h,i)=>[h,v[i]])));
+  exportXlsx(entriesFor(rows,ST.filter(s=>!c||s.sinf===c),f===t?f:null),`davomat_${f}${f===t?'':'_'+t}${c?'_'+c:''}.xlsx`,$('#d4').checked&&!c)}
+ catch(e){alert(e.message)}finally{b.disabled=false;b.textContent='Excel (.xlsx) yuklab olish'}}
 async function fix(day,id,i,o){const a=prompt('Kirish vaqti (HH:MM:SS, bo\'sh = kelmagan):',i);if(a===null)return;const b=a?prompt('Chiqish vaqti (HH:MM:SS, bo\'sh = chiqmagan):',o):'';if(b===null)return;await api('editAttendance',{day,id,in:a,out:b});hload()}
 
 async function rev(){const r=await api('review');view(`<h2>Tekshiruv</h2><div class="card"><p class="l">Noma'lum yuzlar, takroriy va kunning 3+ aniqlashlari avtomatik yozilmaydi — shu yerda ko'rinadi. Kerak bo'lsa "Davomat tarixi"da qo'lda tuzating.</p>
@@ -178,7 +233,7 @@ async function arch(){const [r,c]=await Promise.all([api('archive'),api('getSett
 async function cday(){if(!confirm($('#cd').value+' kunini yopib arxivlaysizmi?'))return;const r=await api('closeDay',{day:$('#cd').value});alert('Arxivlandi: '+r.rows+' yozuv');arch()}
 async function set(){const s=await api('getSettings');view(`<h2>Sozlamalar</h2><div class="card"><div class="bar"><label>Maktab nomi <input id="s0" value="${esc(s.SCHOOL||'')}"></label><label>Dars boshi <input id="s1" value="${s.START}" size=6></label><label>Dars oxiri <input id="s2" value="${s.END}" size=6></label><label>Vaqt mintaqasi <input id="s3" value="${s.TZ}"></label><label>Chiqish uchun min. oraliq (daq) <input id="s4" value="${s.MINGAP}" size=4></label><label>Kunni yopish soati (0-23) <input id="s5" value="${s.CLOSE_HOUR||0}" size=3></label><button class="p" onclick="sset()">Saqlash</button></div>
  <p class="l">${LOCAL?"Mahalliy rejim: ma'lumot faqat shu brauzerda saqlanadi (backend manzili SCHOOL_API bo'sh).":"Backend ulangan."}</p>${LOCAL?'':'<button onclick="lsw(sessionStorage,\'ssTok\',null);lsw(localStorage,\'ssLocal\',null);LOCAL=false;TOK=\'\';start()">Chiqish</button>'}</div>`)}
-async function sset(){await api('setSettings',{SCHOOL:$('#s0').value.trim(),START:$('#s1').value,END:$('#s2').value,TZ:$('#s3').value,MINGAP:$('#s4').value,CLOSE_HOUR:$('#s5').value});alert('Saqlandi')}
+async function sset(){await api('setSettings',{SCHOOL:$('#s0').value.trim(),START:$('#s1').value,END:$('#s2').value,TZ:$('#s3').value,MINGAP:$('#s4').value,CLOSE_HOUR:$('#s5').value});CFG=await api('getSettings');alert('Saqlandi')}
 let LD=ymd(new Date());setInterval(()=>{const n=ymd(new Date());if(n!==LD){LD=n;if(TOK||LOCAL)go(location.hash.slice(1)||'dash')}},15000);
 start();
 </script></body></html>

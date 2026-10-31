@@ -124,12 +124,27 @@ function logEvent(d) {
     let type = 'UNKNOWN', note = d.studentId ? '' : String(d.note || '').slice(0, 120);
     const stu = d.studentId ? students().find(s => s.id === String(d.studentId)) : null;
     if (stu && stu.active) {
-      const A = sh('Attendance'), r = findRow(day, stu.id);
-      if (!r) {
+      const A = sh('Attendance'), r = findRow(day, stu.id), dir = String(d.dir || '');
+      if (dir === 'IN') {                                  // KIRISH kamerasi
+        if (!r) {
+          const c = compute(t);
+          A.appendRow([day, stu.id, stu.ism, stu.familiya, stu.sinf, t, '', c.late, '', c.st, nowStr()]); type = 'IN';
+        } else if (r.v[5] && !r.v[6]) { type = 'IGNORED'; note = 'allaqachon kirgan'; }
+        else if (r.v[5] && r.v[6]) { type = 'REVIEW'; note = 'chiqib ketgandan keyin qayta kirish — admin tekshiradi'; }
+        else { type = 'REVIEW'; note = 'bu kunga yozuv bor (kirishsiz) — admin tekshiradi'; }
+      } else if (dir === 'OUT') {                          // CHIQISH kamerasi
+        if (!r || !r.v[5]) { type = 'REVIEW'; note = "kirish yozilmagan, chiqish kamerasi ko'rdi — admin tekshiradi"; }
+        else if (r.v[6]) { type = 'IGNORED'; note = 'allaqachon chiqqan'; }
+        else if (secs(t) - secs(r.v[5]) < +cfg('MINGAP') * 60) { type = 'IGNORED'; note = 'kirishdan keyin juda yaqin'; }
+        else {
+          const c = compute(r.v[5], t);
+          A.getRange(r.row, 7, 1, 5).setValues([[t, c.late, c.early, c.st, nowStr()]]); type = 'OUT';
+        }
+      } else if (!r) {                                     // bitta kamera rejimi: 1-aniqlanish = kirish
         const c = compute(t);
         A.appendRow([day, stu.id, stu.ism, stu.familiya, stu.sinf, t, '', c.late, '', c.st, nowStr()]);
         type = 'IN';
-      } else if (r.v[5] && !r.v[6]) {
+      } else if (r.v[5] && !r.v[6]) {                      // 2-aniqlanish = chiqish
         if (secs(t) - secs(r.v[5]) < +cfg('MINGAP') * 60) { type = 'IGNORED'; note = 'juda yaqin takror'; }
         else {
           const c = compute(r.v[5], t);
@@ -137,6 +152,7 @@ function logEvent(d) {
           type = 'OUT';
         }
       } else { type = 'REVIEW'; note = 'kunning 3+ aniqlashi — admin tekshiradi'; }
+      if ((type === 'IN' || type === 'OUT') && d.cam) note = String(d.cam) + ' kamerasi';
     }
     ev.appendRow([d.eventId, d.ts, d.studentId || '', type, note]);
     return { type: type, time: t };
